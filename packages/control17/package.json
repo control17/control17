@@ -1,6 +1,6 @@
 {
   "name": "@control17/control17",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Meta-package for control17 — installs the complete ecosystem (cli, link, server, sdk, core) with one command.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",

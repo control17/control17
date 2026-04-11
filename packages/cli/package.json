@@ -1,6 +1,6 @@
 {
   "name": "@control17/cli",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Operator CLI for control17 — push events to running agents, list agents, run a local broker.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
