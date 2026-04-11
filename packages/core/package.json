@@ -1,8 +1,27 @@
 {
   "name": "@control17/core",
   "version": "0.0.0",
-  "description": "Runtime-agnostic broker logic for control17.",
+  "description": "Runtime-agnostic broker logic for control17 — MCP-based agent control plane.",
   "license": "Apache-2.0",
+  "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
+  "homepage": "https://github.com/control17/control17#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/control17/control17.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/control17/control17/issues"
+  },
+  "keywords": [
+    "control17",
+    "c17",
+    "mcp",
+    "agent",
+    "agent-control-plane",
+    "broker",
+    "event-bus"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -1,8 +1,29 @@
 {
   "name": "@control17/server",
   "version": "0.0.0",
-  "description": "Node HTTP broker for control17 (OSS self-host).",
+  "description": "Node HTTP broker for control17 — self-hostable agent control plane (Hono + SQLite).",
   "license": "Apache-2.0",
+  "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
+  "homepage": "https://github.com/control17/control17#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/control17/control17.git",
+    "directory": "apps/server"
+  },
+  "bugs": {
+    "url": "https://github.com/control17/control17/issues"
+  },
+  "keywords": [
+    "control17",
+    "c17",
+    "mcp",
+    "agent",
+    "broker",
+    "server",
+    "self-hosted",
+    "hono",
+    "sqlite"
+  ],
   "type": "module",
   "main": "./dist/run.js",
   "types": "./dist/run.d.ts",

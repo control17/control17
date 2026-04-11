@@ -1,8 +1,27 @@
 {
   "name": "@control17/cli",
   "version": "0.0.0",
-  "description": "Operator CLI for control17.",
+  "description": "Operator CLI for control17 — push events to running agents, list agents, run a local broker.",
   "license": "Apache-2.0",
+  "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
+  "homepage": "https://github.com/control17/control17#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/control17/control17.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/control17/control17/issues"
+  },
+  "keywords": [
+    "control17",
+    "c17",
+    "cli",
+    "mcp",
+    "agent",
+    "agent-control-plane",
+    "operator"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "bin": {

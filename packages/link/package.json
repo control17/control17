@@ -1,8 +1,28 @@
 {
   "name": "@control17/link",
   "version": "0.0.0",
-  "description": "stdio MCP channel link for control17. Spawned by Claude Code.",
+  "description": "stdio MCP channel link for control17. Spawned by Claude Code; bridges a control17 broker into a running session as claude/channel events.",
   "license": "Apache-2.0",
+  "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
+  "homepage": "https://github.com/control17/control17#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/control17/control17.git",
+    "directory": "packages/link"
+  },
+  "bugs": {
+    "url": "https://github.com/control17/control17/issues"
+  },
+  "keywords": [
+    "control17",
+    "c17",
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "claude-channel",
+    "agent",
+    "stdio"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "bin": {

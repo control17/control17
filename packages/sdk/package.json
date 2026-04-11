@@ -1,8 +1,30 @@
 {
   "name": "@control17/sdk",
   "version": "0.0.0",
-  "description": "Contract and TypeScript SDK for control17.",
+  "description": "Contract and TypeScript SDK for control17 — MCP-based agent control plane.",
   "license": "Apache-2.0",
+  "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
+  "homepage": "https://github.com/control17/control17#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/control17/control17.git",
+    "directory": "packages/sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/control17/control17/issues"
+  },
+  "keywords": [
+    "control17",
+    "c17",
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "agent-coordination",
+    "agent-control-plane",
+    "claude-code",
+    "claude-channel",
+    "sdk"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
