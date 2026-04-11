@@ -11,8 +11,9 @@ import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { logger as defaultLogger, type Logger } from './logger.js';
 import { SqliteEventLog } from './sqlite-event-log.js';
+import { SERVER_VERSION } from './version.js';
 
-export const SERVER_VERSION = '0.0.0';
+export { SERVER_VERSION };
 
 export interface RunServerOptions {
   token: string;

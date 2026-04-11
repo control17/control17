@@ -63,10 +63,10 @@ importers:
       '@control17/sdk':
         specifier: workspace:*
         version: link:../sdk
+    devDependencies:
       '@control17/server':
         specifier: workspace:*
         version: link:../../apps/server
-    devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
@@ -79,6 +79,24 @@ importers:
       vitest:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@22.19.17)
+
+  packages/control17:
+    dependencies:
+      '@control17/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@control17/core':
+        specifier: workspace:*
+        version: link:../core
+      '@control17/link':
+        specifier: workspace:*
+        version: link:../link
+      '@control17/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@control17/server':
+        specifier: workspace:*
+        version: link:../../apps/server
 
   packages/core:
     dependencies:

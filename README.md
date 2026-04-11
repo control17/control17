@@ -18,15 +18,30 @@ operators ──HTTP──▶  broker  ──MCP SSE──▶  link  ──stdio
 
 Full diagram and component breakdown: [docs/architecture.md](./docs/architecture.md).
 
+## Install
+
+Pick what you need — or install the meta-package to get everything at once.
+
+```bash
+# Everything (cli + link + server + sdk + core)
+npm install -g @control17/control17
+
+# Or just one role:
+npm install -g @control17/cli       # operator terminal
+npm install -g @control17/link      # Claude Code channel adapter
+npm install -g @control17/server    # self-hosted broker
+```
+
 ## Packages
 
 | Package | Role |
 |---|---|
+| `@control17/control17` | Meta-package — `npm install`s the full ecosystem in one step |
 | `@control17/sdk` | Wire contract + TypeScript client (subpath exports for types-only consumers) |
 | `@control17/core` | Runtime-agnostic broker logic — mailbox, push, SSE, auth |
 | `@control17/server` | Node broker (Hono + better-sqlite3) |
 | `@control17/link` | Per-agent stdio MCP channel server |
-| `@control17/cli` | Operator CLI (`c17 push`, `c17 agents`, `c17 tail`, `c17 serve`) |
+| `@control17/cli` | Operator CLI (`c17 push`, `c17 agents`, `c17 serve`) |
 
 ## Requirements
 

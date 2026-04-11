@@ -38,10 +38,18 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@control17/sdk": "workspace:*",
+    "@control17/sdk": "workspace:*"
+  },
+  "peerDependencies": {
     "@control17/server": "workspace:*"
   },
+  "peerDependenciesMeta": {
+    "@control17/server": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@control17/server": "workspace:*",
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0",

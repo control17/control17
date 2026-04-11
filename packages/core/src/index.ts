@@ -14,4 +14,4 @@ export {
 } from './event-log.js';
 export { AgentRegistry, type AgentState, type Subscriber } from './registry.js';
 
-export const CORE_VERSION = '0.0.0' as const;
+export { CORE_VERSION } from './version.js';

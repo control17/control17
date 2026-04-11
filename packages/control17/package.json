@@ -1,0 +1,36 @@
+{
+  "name": "@control17/control17",
+  "version": "0.0.1",
+  "description": "Meta-package for control17 — installs the complete ecosystem (cli, link, server, sdk, core) with one command.",
+  "license": "Apache-2.0",
+  "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
+  "homepage": "https://github.com/control17/control17#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/control17/control17.git",
+    "directory": "packages/control17"
+  },
+  "bugs": {
+    "url": "https://github.com/control17/control17/issues"
+  },
+  "keywords": [
+    "control17",
+    "c17",
+    "mcp",
+    "agent",
+    "agent-control-plane",
+    "meta-package",
+    "bundle"
+  ],
+  "type": "module",
+  "dependencies": {
+    "@control17/cli": "workspace:*",
+    "@control17/core": "workspace:*",
+    "@control17/link": "workspace:*",
+    "@control17/sdk": "workspace:*",
+    "@control17/server": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

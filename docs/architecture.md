@@ -72,13 +72,16 @@ a `<channel>` event — no polling, no user prompt, no vendor lock-in.
 
 ## Components
 
-| Package | What it is |
-|---|---|
-| **`@control17/sdk`** | The wire contract. Types, zod schemas, protocol constants, TS client. Everything in the ecosystem speaks this. |
-| **`@control17/core`** | Broker logic with zero runtime deps. Mailbox, push fanout, event log, SSE delivery. |
-| **`@control17/server`** | Node broker. Wraps `core` in Hono + better-sqlite3. Install via `npm i -g @control17/server`. |
-| **`@control17/cli`** | Operator terminal. `c17 push`, `c17 agents`, `c17 tail`, `c17 serve`. |
-| **`@control17/link`** | Per-agent stdio MCP server. Spawned by Claude Code; declares the `claude/channel` capability and forwards broker events into the session. |
+| Package | Role | Install when you want |
+|---|---|---|
+| **`@control17/control17`** | Meta-package. Depends on everything below, no code of its own. | The full ecosystem in one install |
+| **`@control17/sdk`** | The wire contract. Types, zod schemas, protocol constants, TS client. Everything speaks this. | To embed a client in your own Node/Workers/browser code |
+| **`@control17/core`** | Broker logic with zero runtime deps. Mailbox, push fanout, event log, SSE delivery. | To build a custom broker runtime (e.g., Durable Objects) |
+| **`@control17/server`** | Node broker. Wraps `core` in Hono + better-sqlite3. | To host a self-hosted broker |
+| **`@control17/link`** | Per-agent stdio MCP server. Declares `claude/channel` and forwards broker events. | To wire Claude Code into a broker via `.mcp.json` |
+| **`@control17/cli`** | Operator terminal. `c17 push`, `c17 agents`, `c17 serve`. | To push/inspect from a terminal |
+
+**Light install:** `@control17/cli` has `@control17/sdk` as its only hard dependency. `@control17/server` is an optional peer — `c17 serve` dynamically imports it and prints an install hint if missing. So `npm i -g @control17/cli` gets you a minimal push tool without dragging in Hono, better-sqlite3, or the MCP SDK.
 
 ## How a push flows
 

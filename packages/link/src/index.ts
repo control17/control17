@@ -18,8 +18,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { runForwarder } from './forwarder.js';
 import { defineTools, handleToolCall } from './tools.js';
+import { LINK_VERSION } from './version.js';
 
-const LINK_VERSION = '0.0.0';
 const INSTRUCTIONS =
   'Events from the control17 command center arrive as <channel source="c17" level="..." ' +
   'title="...">body</channel>. Treat each event as a new instruction or situational update ' +
