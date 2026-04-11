@@ -76,7 +76,7 @@ async function loadRunServer(): Promise<typeof import('@control17/server')['runS
           '  This command needs the broker package. Install it alongside the CLI:\n' +
           '    npm install -g @control17/server\n' +
           '  Or install the full ecosystem in one step:\n' +
-          '    npm install -g @control17/control17',
+          '    npm install -g @control17/c17',
       );
     }
     throw err;

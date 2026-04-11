@@ -4,6 +4,12 @@ import { defineConfig } from 'tsup';
 const pkg = JSON.parse(readFileSync('./package.json', 'utf8')) as { version: string };
 const define = { __PKG_VERSION__: JSON.stringify(pkg.version) };
 
+// Note: `node:sqlite` is loaded via `createRequire` inside
+// `src/sqlite-event-log.ts` to bypass esbuild's aggressive
+// `node:`-prefix normalization. If you touch that file, keep the
+// runtime resolution pattern — otherwise esbuild will emit
+// `import from "sqlite"` (broken at runtime).
+
 export default defineConfig([
   // Library entry (consumed by @control17/cli, etc.)
   {
@@ -14,7 +20,6 @@ export default defineConfig([
     sourcemap: true,
     clean: true,
     target: 'node22',
-    external: ['better-sqlite3'],
     define,
   },
   // Bin entry (consumed by `c17-server`)
@@ -27,7 +32,6 @@ export default defineConfig([
     clean: false,
     target: 'node22',
     banner: { js: '#!/usr/bin/env node' },
-    external: ['better-sqlite3'],
     define,
   },
 ]);

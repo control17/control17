@@ -1,6 +1,6 @@
-# @control17/control17
+# @control17/c17
 
-Meta-package for [control17](https://github.com/control17/control17), an MCP-based agent control plane. Installing this package installs the full ecosystem with one command:
+Meta-package for [control17](https://github.com/control17/control17), an MCP-based agent control plane. Installing this package installs the full ecosystem with one command and wires up all three binaries:
 
 - [`@control17/cli`](https://www.npmjs.com/package/@control17/cli) — operator terminal (`c17 push`, `c17 agents`, `c17 serve`)
 - [`@control17/link`](https://www.npmjs.com/package/@control17/link) — stdio MCP channel for Claude Code (`c17-link` binary)
@@ -8,12 +8,12 @@ Meta-package for [control17](https://github.com/control17/control17), an MCP-bas
 - [`@control17/sdk`](https://www.npmjs.com/package/@control17/sdk) — contract + TypeScript client library
 - [`@control17/core`](https://www.npmjs.com/package/@control17/core) — runtime-agnostic broker logic library
 
-This package has no code of its own — it's a convenience alias for `npm install @control17/cli @control17/link @control17/server`. If you only need one role (just the CLI, just the link, just the server), install that package directly.
+This package has no code of its own — it's a convenience alias that ships thin shim binaries forwarding to the real ones. If you only need one role (just the CLI, just the link, just the server), install that package directly.
 
 ## Install
 
 ```bash
-npm install -g @control17/control17
+npm install -g @control17/c17
 ```
 
 After install, all three binaries are available:

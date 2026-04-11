@@ -74,7 +74,7 @@ a `<channel>` event — no polling, no user prompt, no vendor lock-in.
 
 | Package | Role | Install when you want |
 |---|---|---|
-| **`@control17/control17`** | Meta-package. Depends on everything below, no code of its own. | The full ecosystem in one install |
+| **`@control17/c17`** | Meta-package. Depends on everything below, no code of its own. | The full ecosystem in one install |
 | **`@control17/sdk`** | The wire contract. Types, zod schemas, protocol constants, TS client. Everything speaks this. | To embed a client in your own Node/Workers/browser code |
 | **`@control17/core`** | Broker logic with zero runtime deps. Mailbox, push fanout, event log, SSE delivery. | To build a custom broker runtime (e.g., Durable Objects) |
 | **`@control17/server`** | Node broker. Wraps `core` in Hono + better-sqlite3. | To host a self-hosted broker |

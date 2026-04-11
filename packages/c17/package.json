@@ -1,14 +1,14 @@
 {
-  "name": "@control17/control17",
+  "name": "@control17/c17",
   "version": "0.1.0",
-  "description": "Meta-package for control17 — installs the complete ecosystem (cli, link, server, sdk, core) with one command.",
+  "description": "Meta-package for control17 — installs the complete ecosystem (cli, link, server, sdk, core) in one command with the c17 / c17-link / c17-server binaries wired up.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
   "homepage": "https://github.com/control17/control17#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/control17/control17.git",
-    "directory": "packages/control17"
+    "directory": "packages/c17"
   },
   "bugs": {
     "url": "https://github.com/control17/control17/issues"
@@ -23,6 +23,14 @@
     "bundle"
   ],
   "type": "module",
+  "bin": {
+    "c17": "./bin/c17.mjs",
+    "c17-link": "./bin/c17-link.mjs",
+    "c17-server": "./bin/c17-server.mjs"
+  },
+  "files": [
+    "bin"
+  ],
   "dependencies": {
     "@control17/cli": "workspace:*",
     "@control17/core": "workspace:*",
