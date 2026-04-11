@@ -1,6 +1,6 @@
 {
   "name": "@control17/link",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "stdio MCP channel link for control17. Spawned by Claude Code; bridges a control17 broker into a running session as claude/channel events.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
