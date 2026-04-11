@@ -1,0 +1,202 @@
+/**
+ * `c17` — operator CLI for control17.
+ *
+ * Subcommands:
+ *   c17 push    — push an event to an agent or broadcast
+ *   c17 agents  — list connected agents
+ *   c17 serve   — run a local broker
+ *
+ * Global env vars (defaults):
+ *   C17_URL       = http://127.0.0.1:8717
+ *   C17_TOKEN     (required for push/agents)
+ *   C17_AGENT_ID  (only used if you also run a link)
+ */
+
+import { Client } from '@control17/sdk/client';
+import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
+import { parseDataFlag, parseSubcommandArgs } from './args.js';
+import { runAgentsCommand } from './commands/agents.js';
+import { type PushCommandInput, runPushCommand, UsageError } from './commands/push.js';
+import { runServeCommand } from './commands/serve.js';
+
+const USAGE = `control17 cli
+
+usage:
+  c17 push    --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
+  c17 agents
+  c17 serve   [--port <n>] [--host <h>] [--db <path>]
+
+global options (or via env):
+  --url <url>       broker base URL (env: ${ENV.url}, default: http://127.0.0.1:${DEFAULT_PORT})
+  --token <secret>  broker bearer token (env: ${ENV.token})
+  -h, --help        print this message
+`;
+
+function log(line: string): void {
+  process.stdout.write(`${line}\n`);
+}
+
+function fail(message: string, code = 1): never {
+  process.stderr.write(`c17: ${message}\n`);
+  process.exit(code);
+}
+
+function getString(values: Record<string, unknown>, key: string): string | undefined {
+  const v = values[key];
+  return typeof v === 'string' ? v : undefined;
+}
+
+function getBoolean(values: Record<string, unknown>, key: string): boolean {
+  return values[key] === true;
+}
+
+function makeClient(values: Record<string, unknown>): Client {
+  const url =
+    getString(values, 'url') ?? process.env[ENV.url] ?? `http://127.0.0.1:${DEFAULT_PORT}`;
+  const token = getString(values, 'token') ?? process.env[ENV.token];
+  if (!token) {
+    fail(`--token or ${ENV.token} is required`);
+  }
+  return new Client({ url, token });
+}
+
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0 || argv[0] === '-h' || argv[0] === '--help') {
+    process.stdout.write(USAGE);
+    return;
+  }
+
+  const subcommand = argv[0];
+  const rest = argv.slice(1);
+
+  switch (subcommand) {
+    case 'push':
+      await handlePush(rest);
+      return;
+    case 'agents':
+      await handleAgents(rest);
+      return;
+    case 'serve':
+      await handleServe(rest);
+      return;
+    default:
+      process.stderr.write(USAGE);
+      fail(`unknown subcommand: ${subcommand}`);
+  }
+}
+
+async function handlePush(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    agent: { type: 'string', short: 'a' },
+    body: { type: 'string', short: 'b' },
+    title: { type: 'string', short: 't' },
+    level: { type: 'string', short: 'l' },
+    broadcast: { type: 'boolean' },
+    data: { type: 'string', multiple: true },
+    url: { type: 'string' },
+    token: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  const dataRaw = values.data as string[] | undefined;
+  let data: Record<string, unknown> | undefined;
+  try {
+    data = parseDataFlag(dataRaw);
+  } catch (err) {
+    fail((err as Error).message);
+  }
+
+  const input: PushCommandInput = {
+    agentId: getString(values, 'agent'),
+    body: getString(values, 'body') ?? '',
+    title: getString(values, 'title'),
+    level: getString(values, 'level'),
+    broadcast: getBoolean(values, 'broadcast'),
+    data,
+  };
+
+  try {
+    const client = makeClient(values);
+    const output = await runPushCommand(input, client);
+    log(output);
+  } catch (err) {
+    if (err instanceof UsageError) fail(err.message, 2);
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleAgents(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    url: { type: 'string' },
+    token: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  try {
+    const client = makeClient(values);
+    const output = await runAgentsCommand(client);
+    log(output);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleServe(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    token: { type: 'string' },
+    port: { type: 'string' },
+    host: { type: 'string' },
+    db: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  const portStr = getString(values, 'port');
+  let port: number | undefined;
+  if (portStr !== undefined) {
+    const parsed = Number(portStr);
+    if (Number.isNaN(parsed) || parsed < 1 || parsed > 65_535) {
+      fail(`invalid --port: ${portStr}`, 2);
+    }
+    port = parsed;
+  }
+
+  let running: Awaited<ReturnType<typeof runServeCommand>> | null = null;
+  try {
+    running = await runServeCommand(
+      {
+        token: getString(values, 'token'),
+        port,
+        host: getString(values, 'host'),
+        dbPath: getString(values, 'db'),
+      },
+      (line) => log(line),
+    );
+  } catch (err) {
+    if (err instanceof (await import('./commands/serve.js')).UsageError) {
+      fail(err.message, 2);
+    }
+    fail(err instanceof Error ? err.message : String(err));
+  }
+
+  const shutdown = async (signal: NodeJS.Signals) => {
+    process.stderr.write(`\nc17 serve: stopping (${signal})...\n`);
+    await running?.stop();
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+main().catch((err) => {
+  fail(err instanceof Error ? (err.stack ?? err.message) : String(err));
+});

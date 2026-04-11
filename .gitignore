@@ -1,3 +1,22 @@
+# Turborepo
+.turbo
+# Build artifacts
+dist
+*.tsbuildinfo
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local dev config (tokens, absolute paths — see .mcp.example.json)
+.mcp.json
+
+# Stray local databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 # Logs
 logs
 *.log

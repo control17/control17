@@ -1,0 +1,216 @@
+/**
+ * End-to-end test for control17's first slice.
+ *
+ * Brings up the real server (in-process via `runServer`), spawns the
+ * real link binary as a subprocess, and drives the full loop:
+ *
+ *   1. Operator pushes a message via the SDK Client
+ *   2. Server fans out to the live SSE subscriber (the link)
+ *   3. Link forwards to Claude Code as `notifications/claude/channel`
+ *   4. Agent-as-operator: link's `send` tool is invoked via stdio and
+ *      hits the broker's /push endpoint through the same client path.
+ */
+
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Client } from '@control17/sdk/client';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type RunningServer, runServer } from '../src/run.js';
+
+interface JsonRpcMessage {
+  jsonrpc?: '2.0';
+  id?: string | number;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+}
+
+const LINK_BINARY = resolve(
+  fileURLToPath(new URL('../../../packages/link/dist/index.js', import.meta.url)),
+);
+const AGENT_ID = 'e2e-agent';
+const PEER_AGENT_ID = 'e2e-peer';
+const TOKEN = 'e2e-token';
+
+describe('end-to-end: operator → broker → link → channel event', () => {
+  let server: RunningServer;
+  let link: ChildProcessWithoutNullStreams;
+  let client: Client;
+
+  const inbound: JsonRpcMessage[] = [];
+  let stdoutBuf = '';
+
+  beforeAll(async () => {
+    server = await runServer({
+      token: TOKEN,
+      port: 0,
+      host: '127.0.0.1',
+      dbPath: ':memory:',
+      // Silence server logs during the test to keep output clean.
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      },
+    });
+    const url = `http://${server.host}:${server.port}`;
+    client = new Client({ url, token: TOKEN });
+
+    // Sanity-check the server is up before spawning the link.
+    const health = await client.health();
+    expect(health.status).toBe('ok');
+
+    link = spawn(process.execPath, [LINK_BINARY], {
+      env: {
+        ...process.env,
+        C17_URL: url,
+        C17_TOKEN: TOKEN,
+        C17_AGENT_ID: AGENT_ID,
+      },
+      stdio: 'pipe',
+    });
+
+    link.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuf += chunk.toString('utf8');
+      let idx = stdoutBuf.indexOf('\n');
+      while (idx !== -1) {
+        const line = stdoutBuf.slice(0, idx).trim();
+        stdoutBuf = stdoutBuf.slice(idx + 1);
+        if (line.length > 0) {
+          try {
+            inbound.push(JSON.parse(line) as JsonRpcMessage);
+          } catch {
+            // skip non-JSON lines
+          }
+        }
+        idx = stdoutBuf.indexOf('\n');
+      }
+    });
+    link.stderr.on('data', (chunk: Buffer) => {
+      if (process.env.E2E_DEBUG) {
+        process.stderr.write(`[link] ${chunk.toString('utf8')}`);
+      }
+    });
+
+    // Simulate Claude Code's MCP initialize handshake.
+    link.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'e2e', version: '0.0.1' },
+        },
+      })}\n`,
+    );
+    await waitForMessage((m) => m.id === 1, inbound, 5_000);
+
+    link.stdin.write(
+      `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
+    );
+
+    // Wait until the link registers AND subscribes (connected > 0).
+    await waitUntil(async () => {
+      const agents = await client.listAgents();
+      const us = agents.find((a) => a.agentId === AGENT_ID);
+      return Boolean(us && us.connected > 0);
+    }, 5_000);
+  }, 20_000);
+
+  afterAll(async () => {
+    if (link && link.exitCode === null) {
+      link.kill('SIGTERM');
+      await new Promise<void>((r) => link.once('exit', () => r()));
+    }
+    await server.stop();
+  });
+
+  it('operator push via SDK surfaces as a channel event on link stdio', async () => {
+    await client.push({
+      agentId: AGENT_ID,
+      body: 'end-to-end test push',
+      title: 'e2e',
+      level: 'warning',
+      data: { run_id: 'e2e-1', kind: 'ci_alert' },
+    });
+
+    const event = await waitForMessage(
+      (m) => m.method === 'notifications/claude/channel',
+      inbound,
+      5_000,
+    );
+    const params = event.params as {
+      content: string;
+      meta: Record<string, string>;
+    };
+    expect(params.content).toBe('end-to-end test push');
+    expect(params.meta.title).toBe('e2e');
+    expect(params.meta.level).toBe('warning');
+    expect(params.meta.run_id).toBe('e2e-1');
+    expect(params.meta.kind).toBe('ci_alert');
+  });
+
+  it('agent-as-operator: link send tool reaches the broker and back', async () => {
+    // Register a peer so the send tool has a valid target.
+    await client.register(PEER_AGENT_ID);
+
+    link.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 42,
+        method: 'tools/call',
+        params: {
+          name: 'send',
+          arguments: {
+            targetAgentId: PEER_AGENT_ID,
+            body: 'agent-originated message',
+            title: 'hello from e2e-agent',
+            level: 'info',
+          },
+        },
+      })}\n`,
+    );
+
+    const response = await waitForMessage((m) => m.id === 42, inbound, 5_000);
+    const result = response.result as {
+      content: Array<{ type: string; text: string }>;
+    };
+    expect(result.content[0]?.text ?? '').toContain(`delivered to ${PEER_AGENT_ID}`);
+  });
+});
+
+async function waitForMessage(
+  predicate: (m: JsonRpcMessage) => boolean,
+  queue: JsonRpcMessage[],
+  timeoutMs = 3_000,
+): Promise<JsonRpcMessage> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (let i = 0; i < queue.length; i++) {
+      const msg = queue[i];
+      if (msg && predicate(msg)) {
+        queue.splice(i, 1);
+        return msg;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error('timed out waiting for message');
+}
+
+async function waitUntil(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error('waitUntil timed out');
+}
