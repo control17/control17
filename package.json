@@ -1,6 +1,6 @@
 {
   "name": "control17",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "MCP-based agent control plane. OSS monorepo.",
   "license": "Apache-2.0",

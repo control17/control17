@@ -1,6 +1,6 @@
 {
   "name": "@control17/core",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Runtime-agnostic broker logic for control17 — MCP-based agent control plane.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",

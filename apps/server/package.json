@@ -1,6 +1,6 @@
 {
   "name": "@control17/server",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Node HTTP broker for control17 — self-hostable agent control plane (Hono + SQLite).",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
