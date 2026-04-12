@@ -10,6 +10,8 @@ import { z } from 'zod';
 
 export const LogLevelSchema = z.enum(['debug', 'info', 'notice', 'warning', 'error', 'critical']);
 
+export const PrincipalKindSchema = z.enum(['human', 'agent', 'service']);
+
 export const AgentIdSchema = z
   .string()
   .min(1)
@@ -31,6 +33,8 @@ export const MessageSchema = z.object({
   id: z.string(),
   ts: z.number(),
   agentId: AgentIdSchema.nullable(),
+  /** Broker-stamped authoritative sender principal, or null for system events. */
+  from: z.string().nullable(),
   title: z.string().nullable(),
   body: z.string(),
   level: LogLevelSchema,
@@ -42,6 +46,7 @@ export const AgentSchema = z.object({
   connected: z.number().int().nonnegative(),
   createdAt: z.number(),
   lastSeen: z.number(),
+  kind: PrincipalKindSchema.nullable(),
 });
 
 export const AgentRegistrationRequestSchema = z.object({
@@ -70,4 +75,13 @@ export const AgentListSchema = z.object({
 export const HealthResponseSchema = z.object({
   status: z.literal('ok'),
   version: z.string(),
+});
+
+export const WhoamiResponseSchema = z.object({
+  name: z.string(),
+  kind: PrincipalKindSchema,
+});
+
+export const HistoryResponseSchema = z.object({
+  messages: z.array(MessageSchema),
 });

@@ -26,6 +26,7 @@ describe('SqliteEventLog', () => {
       id: 'a',
       ts: 1,
       agentId: 'x',
+      from: 'alice',
       title: 'hi',
       body: 'hello',
       level: 'warning',
@@ -38,6 +39,24 @@ describe('SqliteEventLog', () => {
     await log.close();
   });
 
+  it('round-trips messages with null `from` (e.g., pre-auth migration data)', async () => {
+    const log = new SqliteEventLog(tmpDbPath());
+    const m: Message = {
+      id: 'legacy',
+      ts: 5,
+      agentId: null,
+      from: null,
+      title: null,
+      body: 'no sender known',
+      level: 'info',
+      data: {},
+    };
+    await log.append(m);
+    const tailed = await log.tail();
+    expect(tailed[0]?.from).toBeNull();
+    await log.close();
+  });
+
   it('tail honours since + limit', async () => {
     const log = new SqliteEventLog(tmpDbPath());
     for (let i = 0; i < 5; i++) {
@@ -45,6 +64,7 @@ describe('SqliteEventLog', () => {
         id: `m${i}`,
         ts: i,
         agentId: null,
+        from: null,
         title: null,
         body: `msg ${i}`,
         level: 'info',
@@ -66,6 +86,7 @@ describe('SqliteEventLog', () => {
       id: 'persist',
       ts: 10,
       agentId: 'a1',
+      from: 'alice',
       title: null,
       body: 'survive',
       level: 'info',
@@ -77,6 +98,7 @@ describe('SqliteEventLog', () => {
     const tailed = await second.tail();
     expect(tailed).toHaveLength(1);
     expect(tailed[0]?.body).toBe('survive');
+    expect(tailed[0]?.from).toBe('alice');
     await second.close();
   });
 });

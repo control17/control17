@@ -13,13 +13,25 @@
  * (unflagged but labelled). We suppress the single startup warning so
  * the server's stdout stays clean — users don't need the reminder on
  * every launch.
+ *
+ * Schema evolution note: the `from_name` column was added alongside
+ * named-token auth. Opening an older database file without the column
+ * triggers a best-effort `ALTER TABLE ADD COLUMN` so existing deployments
+ * don't need a manual migration. Pre-existing rows receive `from_name
+ * IS NULL`, which rowToMessage maps to `from: null`.
  */
 
 // Suppress the experimental warning before the first node:sqlite import.
 import './suppress-experimental-warnings.js';
 
 import { createRequire } from 'node:module';
-import type { EventLog, EventLogTailOptions } from '@control17/core';
+import {
+  DEFAULT_QUERY_LIMIT,
+  type EventLog,
+  type EventLogQueryOptions,
+  type EventLogTailOptions,
+  MAX_QUERY_LIMIT,
+} from '@control17/core';
 import type { LogLevel, Message } from '@control17/sdk/types';
 
 // esbuild (at least up to 0.27.x) strips the `node:` prefix off
@@ -40,6 +52,7 @@ interface EventRow {
   id: string;
   ts: number;
   agent_id: string | null;
+  from_name: string | null;
   title: string | null;
   body: string;
   level: string;
@@ -51,6 +64,7 @@ const CREATE_SCHEMA = `
     id TEXT PRIMARY KEY,
     ts INTEGER NOT NULL,
     agent_id TEXT,
+    from_name TEXT,
     title TEXT,
     body TEXT NOT NULL,
     level TEXT NOT NULL,
@@ -63,18 +77,42 @@ export class SqliteEventLog implements EventLog {
   private readonly db: DatabaseSyncInstance;
   private readonly insertStmt: StatementInstance;
   private readonly tailSinceStmt: StatementInstance;
+  private readonly queryFeedStmt: StatementInstance;
+  private readonly queryDmStmt: StatementInstance;
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
-    // node:sqlite doesn't have a .pragma() helper — use exec() for PRAGMAs.
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA synchronous = NORMAL');
     this.db.exec(CREATE_SCHEMA);
+    try {
+      this.db.exec('ALTER TABLE events ADD COLUMN from_name TEXT');
+    } catch {
+      /* already exists — normal case */
+    }
     this.insertStmt = this.db.prepare(
-      'INSERT INTO events (id, ts, agent_id, title, body, level, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO events (id, ts, agent_id, from_name, title, body, level, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.tailSinceStmt = this.db.prepare(
-      'SELECT id, ts, agent_id, title, body, level, data FROM events WHERE ts >= ? ORDER BY ts DESC LIMIT ?',
+      'SELECT id, ts, agent_id, from_name, title, body, level, data FROM events WHERE ts >= ? ORDER BY ts DESC LIMIT ?',
+    );
+    this.queryFeedStmt = this.db.prepare(
+      `SELECT id, ts, agent_id, from_name, title, body, level, data
+       FROM events
+       WHERE ts < ?
+         AND (agent_id IS NULL OR from_name = ? OR agent_id = ?)
+       ORDER BY ts DESC LIMIT ?`,
+    );
+    this.queryDmStmt = this.db.prepare(
+      `SELECT id, ts, agent_id, from_name, title, body, level, data
+       FROM events
+       WHERE ts < ?
+         AND agent_id IS NOT NULL
+         AND (
+           (from_name = ? AND agent_id = ?)
+           OR (from_name = ? AND agent_id = ?)
+         )
+       ORDER BY ts DESC LIMIT ?`,
     );
   }
 
@@ -83,6 +121,7 @@ export class SqliteEventLog implements EventLog {
       message.id,
       message.ts,
       message.agentId,
+      message.from,
       message.title,
       message.body,
       message.level,
@@ -92,11 +131,34 @@ export class SqliteEventLog implements EventLog {
 
   async tail(options: EventLogTailOptions = {}): Promise<Message[]> {
     const since = options.since ?? 0;
-    const limit = options.limit ?? 100;
+    const limit = options.limit ?? DEFAULT_QUERY_LIMIT;
     const rows = this.tailSinceStmt.all(since, limit) as unknown as EventRow[];
-    // DB returns newest-first (ORDER BY ts DESC) — reverse to match the
-    // in-memory impl's oldest-first-within-window shape.
     return rows.reverse().map(rowToMessage);
+  }
+
+  async query(options: EventLogQueryOptions): Promise<Message[]> {
+    const limit = Math.min(options.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
+    const before = options.before ?? Number.MAX_SAFE_INTEGER;
+
+    let rows: EventRow[];
+    if (options.with) {
+      rows = this.queryDmStmt.all(
+        before,
+        options.viewer,
+        options.with,
+        options.with,
+        options.viewer,
+        limit,
+      ) as unknown as EventRow[];
+    } else {
+      rows = this.queryFeedStmt.all(
+        before,
+        options.viewer,
+        options.viewer,
+        limit,
+      ) as unknown as EventRow[];
+    }
+    return rows.map(rowToMessage);
   }
 
   async close(): Promise<void> {
@@ -109,6 +171,7 @@ function rowToMessage(row: EventRow): Message {
     id: row.id,
     ts: row.ts,
     agentId: row.agent_id,
+    from: row.from_name,
     title: row.title,
     body: row.body,
     level: row.level as LogLevel,

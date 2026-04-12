@@ -64,6 +64,7 @@ describe('runPushCommand', () => {
       id: 'msg-x',
       ts: 1,
       agentId: 'a1',
+      from: 'alice',
       title: null,
       body: 'hi',
       level: 'info',
@@ -104,6 +105,7 @@ describe('runAgentsCommand', () => {
         connected: 1,
         createdAt: 1_700_000_000_000,
         lastSeen: 1_700_000_100_000,
+        kind: 'agent',
       },
     ];
     const client = new Client({

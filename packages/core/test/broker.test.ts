@@ -1,6 +1,6 @@
 import type { Message } from '@control17/sdk/types';
 import { describe, expect, it, vi } from 'vitest';
-import { Broker, InMemoryEventLog } from '../src/index.js';
+import { AgentIdentityError, Broker, InMemoryEventLog } from '../src/index.js';
 
 function makeBroker(overrides: { idFactory?: () => string; now?: () => number } = {}) {
   const eventLog = new InMemoryEventLog();
@@ -29,6 +29,160 @@ describe('Broker.register', () => {
     const second = await broker.register('agent-1');
     expect(first.registeredAt).toBe(second.registeredAt);
     expect(broker.listAgents()).toHaveLength(1);
+  });
+
+  it('records principal kind from the register context', async () => {
+    const { broker } = makeBroker();
+    await broker.register('build-bot', { kind: 'agent' });
+    const agents = broker.listAgents();
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.kind).toBe('agent');
+  });
+
+  it('defaults kind to null when no context is supplied', async () => {
+    const { broker } = makeBroker();
+    await broker.register('nameless');
+    expect(broker.listAgents()[0]?.kind).toBeNull();
+  });
+
+  it('allows the matching principal to register idempotently', async () => {
+    const { broker } = makeBroker();
+    await broker.register('alice', { kind: 'human', principal: 'alice' });
+    await broker.register('alice', { kind: 'human', principal: 'alice' });
+    expect(broker.listAgents()).toHaveLength(1);
+  });
+
+  it('rejects register when agentId does not equal principal', async () => {
+    const { broker } = makeBroker();
+    await expect(
+      broker.register('alice', { kind: 'human', principal: 'mallory' }),
+    ).rejects.toBeInstanceOf(AgentIdentityError);
+  });
+
+  it('skips the identity check when no principal is supplied', async () => {
+    const { broker } = makeBroker();
+    await expect(broker.register('whoever')).resolves.toBeDefined();
+  });
+});
+
+describe('Broker.subscribe identity', () => {
+  it('rejects subscribe when agentId does not equal principal', async () => {
+    const { broker } = makeBroker();
+    expect(() => broker.subscribe('alice', () => {}, { principal: 'mallory' })).toThrow(
+      AgentIdentityError,
+    );
+  });
+
+  it('allows the matching principal to subscribe', async () => {
+    const { broker } = makeBroker();
+    const received: Message[] = [];
+    broker.subscribe(
+      'alice',
+      (m) => {
+        received.push(m);
+      },
+      { principal: 'alice' },
+    );
+    await broker.push({ agentId: 'alice', body: 'hi' }, { from: 'bob' });
+    expect(received).toHaveLength(1);
+  });
+});
+
+describe('Broker.push DM sender-fanout', () => {
+  it("delivers a DM to the sender's own agent when both are registered", async () => {
+    const { broker } = makeBroker();
+    await broker.register('alice', { kind: 'human', principal: 'alice' });
+    await broker.register('build-bot', { kind: 'agent', principal: 'build-bot' });
+
+    const aliceReceived: Message[] = [];
+    const botReceived: Message[] = [];
+    broker.subscribe(
+      'alice',
+      (m) => {
+        aliceReceived.push(m);
+      },
+      { principal: 'alice' },
+    );
+    broker.subscribe(
+      'build-bot',
+      (m) => {
+        botReceived.push(m);
+      },
+      { principal: 'build-bot' },
+    );
+
+    const result = await broker.push({ agentId: 'build-bot', body: 'status?' }, { from: 'alice' });
+
+    // Primary target is still build-bot; alice's copy is sender-fanout
+    // for multi-device consistency.
+    expect(result.delivery.targets).toBe(1);
+    expect(result.delivery.sse).toBe(2);
+    expect(botReceived).toHaveLength(1);
+    expect(aliceReceived).toHaveLength(1);
+    expect(aliceReceived[0]?.agentId).toBe('build-bot');
+    expect(aliceReceived[0]?.from).toBe('alice');
+  });
+
+  it('does not double-deliver when the sender talks to themselves', async () => {
+    const { broker } = makeBroker();
+    await broker.register('alice', { kind: 'human', principal: 'alice' });
+    const received: Message[] = [];
+    broker.subscribe(
+      'alice',
+      (m) => {
+        received.push(m);
+      },
+      { principal: 'alice' },
+    );
+
+    const result = await broker.push({ agentId: 'alice', body: 'note-to-self' }, { from: 'alice' });
+
+    expect(result.delivery.targets).toBe(1);
+    expect(result.delivery.sse).toBe(1);
+    expect(received).toHaveLength(1);
+  });
+
+  it('is a no-op when the sender has no registered agent', async () => {
+    const { broker } = makeBroker();
+    await broker.register('build-bot', { kind: 'agent', principal: 'build-bot' });
+    const received: Message[] = [];
+    broker.subscribe(
+      'build-bot',
+      (m) => {
+        received.push(m);
+      },
+      { principal: 'build-bot' },
+    );
+
+    const result = await broker.push({ agentId: 'build-bot', body: 'hello' }, { from: 'alice' });
+    expect(result.delivery.targets).toBe(1);
+    expect(result.delivery.sse).toBe(1);
+    expect(received).toHaveLength(1);
+  });
+});
+
+describe('Broker.push stamping', () => {
+  it('stamps `from` from the push context, never from the payload', async () => {
+    const { broker } = makeBroker();
+    await broker.register('agent-1');
+
+    // The payload has no way to supply `from` at the type level, but
+    // even if a runtime adapter accidentally passed one in via `data`,
+    // the broker must ignore it — only the context value wins.
+    const result = await broker.push(
+      { agentId: 'agent-1', body: 'hi', data: { from: 'spoofed' } },
+      { from: 'alice' },
+    );
+
+    expect(result.message.from).toBe('alice');
+    expect(result.message.data).toEqual({ from: 'spoofed' }); // data passed through untouched
+  });
+
+  it('stamps `from: null` when no context is supplied', async () => {
+    const { broker } = makeBroker();
+    await broker.register('agent-1');
+    const result = await broker.push({ agentId: 'agent-1', body: 'hi' });
+    expect(result.message.from).toBeNull();
   });
 });
 
@@ -162,6 +316,61 @@ describe('Broker.subscribe', () => {
   });
 });
 
+describe('InMemoryEventLog.query', () => {
+  function msg(overrides: Partial<Message> & { id: string; ts: number }): Message {
+    return {
+      agentId: null,
+      from: null,
+      title: null,
+      body: 'msg',
+      level: 'info',
+      data: {},
+      ...overrides,
+    };
+  }
+
+  it('returns broadcasts + DMs involving the viewer', async () => {
+    const log = new InMemoryEventLog();
+    await log.append(msg({ id: 'bcast', ts: 1 }));
+    await log.append(msg({ id: 'dm-to-alice', ts: 2, agentId: 'alice', from: 'bob' }));
+    await log.append(msg({ id: 'dm-from-alice', ts: 3, agentId: 'bob', from: 'alice' }));
+    await log.append(msg({ id: 'other-dm', ts: 4, agentId: 'carol', from: 'bob' }));
+
+    const result = await log.query({ viewer: 'alice' });
+    const ids = result.map((m) => m.id);
+    expect(ids).toContain('bcast');
+    expect(ids).toContain('dm-to-alice');
+    expect(ids).toContain('dm-from-alice');
+    expect(ids).not.toContain('other-dm');
+  });
+
+  it('narrows to DMs with a specific other when `with` is set', async () => {
+    const log = new InMemoryEventLog();
+    await log.append(msg({ id: 'bcast', ts: 1 }));
+    await log.append(msg({ id: 'dm-alice-bob', ts: 2, agentId: 'bob', from: 'alice' }));
+    await log.append(msg({ id: 'dm-bob-alice', ts: 3, agentId: 'alice', from: 'bob' }));
+    await log.append(msg({ id: 'dm-alice-carol', ts: 4, agentId: 'carol', from: 'alice' }));
+
+    const result = await log.query({ viewer: 'alice', with: 'bob' });
+    const ids = result.map((m) => m.id);
+    expect(ids).toEqual(['dm-bob-alice', 'dm-alice-bob']);
+    expect(ids).not.toContain('bcast');
+    expect(ids).not.toContain('dm-alice-carol');
+  });
+
+  it('respects limit and before for pagination', async () => {
+    const log = new InMemoryEventLog();
+    for (let i = 1; i <= 10; i++) {
+      await log.append(msg({ id: `m${i}`, ts: i }));
+    }
+    const page1 = await log.query({ viewer: 'alice', limit: 3 });
+    expect(page1.map((m) => m.id)).toEqual(['m10', 'm9', 'm8']);
+
+    const page2 = await log.query({ viewer: 'alice', limit: 3, before: 8 });
+    expect(page2.map((m) => m.id)).toEqual(['m7', 'm6', 'm5']);
+  });
+});
+
 describe('InMemoryEventLog', () => {
   it('append + tail round-trip', async () => {
     const log = new InMemoryEventLog();
@@ -169,6 +378,7 @@ describe('InMemoryEventLog', () => {
       id: 'a',
       ts: 1,
       agentId: 'x',
+      from: null,
       title: null,
       body: 'a',
       level: 'info',
@@ -190,6 +400,7 @@ describe('InMemoryEventLog', () => {
         id: `m${i}`,
         ts: i,
         agentId: null,
+        from: null,
         title: null,
         body: `msg ${i}`,
         level: 'info',

@@ -2,9 +2,9 @@
  * Tool definitions and handlers for the link's MCP server face.
  *
  * Exposed tools:
- *   - send        — push a message to another control17-connected agent
+ *   - send_dm     — DM a specific agent
+ *   - broadcast   — push a message to every registered agent
  *   - list_agents — list all currently registered agents
- *   - register    — register an agent id (rarely needed; the link does it automatically)
  */
 
 import type { Client as BrokerClient, ClientError } from '@control17/sdk/client';
@@ -16,21 +16,21 @@ const LEVELS: readonly LogLevel[] = ['debug', 'info', 'notice', 'warning', 'erro
 export function defineTools(selfAgentId: string): Tool[] {
   return [
     {
-      name: 'send',
+      name: 'send_dm',
       description:
-        `Push a message to another control17-connected agent. The target receives it as a ` +
-        `channel event in real time. You are agent '${selfAgentId}'. ` +
-        `Call list_agents first to discover peers.`,
+        `Send a direct message to one control17 agent. You are '${selfAgentId}'. ` +
+        'The message is private to you and the target — other agents will not see it. ' +
+        'Call list_agents first to discover peers.',
       inputSchema: {
         type: 'object',
         properties: {
-          targetAgentId: {
+          to: {
             type: 'string',
-            description: 'The agent_id of the peer to message.',
+            description: 'The agent_id (= principal name) of the peer to message.',
           },
           body: {
             type: 'string',
-            description: 'The message body the peer will receive.',
+            description: 'The message body.',
           },
           title: {
             type: 'string',
@@ -42,7 +42,30 @@ export function defineTools(selfAgentId: string): Tool[] {
             description: "Optional severity; defaults to 'info'.",
           },
         },
-        required: ['targetAgentId', 'body'],
+        required: ['to', 'body'],
+      },
+    },
+    {
+      name: 'broadcast',
+      description: `Broadcast a message to every registered agent on the squadron net. You are '${selfAgentId}'.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          body: {
+            type: 'string',
+            description: 'The message body.',
+          },
+          title: {
+            type: 'string',
+            description: 'Optional short title / subject line.',
+          },
+          level: {
+            type: 'string',
+            enum: [...LEVELS],
+            description: "Optional severity; defaults to 'info'.",
+          },
+        },
+        required: ['body'],
       },
     },
     {
@@ -52,22 +75,6 @@ export function defineTools(selfAgentId: string): Tool[] {
       inputSchema: {
         type: 'object',
         properties: {},
-      },
-    },
-    {
-      name: 'register',
-      description:
-        'Register (or re-register) an agent id with the broker. The link registers itself ' +
-        'automatically at startup; this tool is for edge cases.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          agentId: {
-            type: 'string',
-            description: 'The agent_id to register.',
-          },
-        },
-        required: ['agentId'],
       },
     },
   ];
@@ -82,12 +89,12 @@ export async function handleToolCall(
   const args = rawArgs ?? {};
   try {
     switch (name) {
-      case 'send':
-        return await handleSend(args, brokerClient, selfAgentId);
+      case 'send_dm':
+        return await handleSendDm(args, brokerClient);
+      case 'broadcast':
+        return await handleBroadcast(args, brokerClient);
       case 'list_agents':
-        return await handleListAgents(brokerClient);
-      case 'register':
-        return await handleRegister(args, brokerClient);
+        return await handleListAgents(brokerClient, selfAgentId);
       default:
         return errorResult(`unknown tool: ${name}`);
     }
@@ -100,54 +107,48 @@ export async function handleToolCall(
   }
 }
 
-async function handleSend(
+async function handleSendDm(
   args: Record<string, unknown>,
   brokerClient: BrokerClient,
-  selfAgentId: string,
 ): Promise<CallToolResult> {
-  const targetAgentId = typeof args.targetAgentId === 'string' ? args.targetAgentId : '';
+  const to = typeof args.to === 'string' ? args.to : '';
   const body = typeof args.body === 'string' ? args.body : '';
-  if (!targetAgentId || !body) {
-    return errorResult('send: targetAgentId and body are required');
-  }
+  if (!to || !body) return errorResult('send_dm: `to` and `body` are required');
   const level = isLogLevel(args.level) ? args.level : 'info';
   const title = typeof args.title === 'string' ? args.title : null;
-
-  const result = await brokerClient.push({
-    agentId: targetAgentId,
-    body,
-    title,
-    level,
-    data: { from: selfAgentId },
-  });
+  const result = await brokerClient.push({ agentId: to, body, title, level });
   return textResult(
-    `delivered to ${targetAgentId}: sse=${result.delivery.sse} ` +
+    `delivered to ${to}: sse=${result.delivery.sse} ` +
       `targets=${result.delivery.targets} msg=${result.message.id}`,
   );
 }
 
-async function handleListAgents(brokerClient: BrokerClient): Promise<CallToolResult> {
-  const agents = await brokerClient.listAgents();
-  if (agents.length === 0) {
-    return textResult('connected agents: (none)');
-  }
-  const lines = agents.map(
-    (a) =>
-      `- ${a.agentId} (connected=${a.connected}, lastSeen=${new Date(a.lastSeen).toISOString()})`,
-  );
-  return textResult(`connected agents:\n${lines.join('\n')}`);
-}
-
-async function handleRegister(
+async function handleBroadcast(
   args: Record<string, unknown>,
   brokerClient: BrokerClient,
 ): Promise<CallToolResult> {
-  const agentId = typeof args.agentId === 'string' ? args.agentId : '';
-  if (!agentId) {
-    return errorResult('register: agentId is required');
-  }
-  const reg = await brokerClient.register(agentId);
-  return textResult(`registered ${reg.agentId} at ${new Date(reg.registeredAt).toISOString()}`);
+  const body = typeof args.body === 'string' ? args.body : '';
+  if (!body) return errorResult('broadcast: `body` is required');
+  const level = isLogLevel(args.level) ? args.level : 'info';
+  const title = typeof args.title === 'string' ? args.title : null;
+  const result = await brokerClient.push({ body, title, level });
+  return textResult(
+    `broadcast delivered: sse=${result.delivery.sse} ` +
+      `targets=${result.delivery.targets} msg=${result.message.id}`,
+  );
+}
+
+async function handleListAgents(
+  brokerClient: BrokerClient,
+  selfAgentId: string,
+): Promise<CallToolResult> {
+  const agents = await brokerClient.listAgents();
+  if (agents.length === 0) return textResult('connected agents: (none)');
+  const lines = agents.map((a) => {
+    const self = a.agentId === selfAgentId ? ' (you)' : '';
+    return `- ${a.agentId}${self} [${a.kind ?? '?'}] connected=${a.connected}`;
+  });
+  return textResult(`connected agents:\n${lines.join('\n')}`);
 }
 
 function isLogLevel(v: unknown): v is LogLevel {

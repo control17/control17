@@ -12,6 +12,10 @@ dist
 # Local dev config (tokens, absolute paths — see .mcp.example.json)
 .mcp.json
 
+# Local dev server config (contains plaintext tokens — see apps/server/config.example.json)
+config.dev.json
+apps/server/config.dev.json
+
 # Stray local databases
 *.db
 *.db-journal

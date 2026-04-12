@@ -8,10 +8,18 @@
 
 export { Broker, type BrokerLogger, type BrokerOptions } from './broker.js';
 export {
+  DEFAULT_QUERY_LIMIT,
   type EventLog,
+  type EventLogQueryOptions,
   type EventLogTailOptions,
   InMemoryEventLog,
+  MAX_QUERY_LIMIT,
 } from './event-log.js';
-export { AgentRegistry, type AgentState, type Subscriber } from './registry.js';
+export {
+  AgentIdentityError,
+  AgentRegistry,
+  type AgentState,
+  type Subscriber,
+} from './registry.js';
 
 export { CORE_VERSION } from './version.js';

@@ -4,9 +4,14 @@
  * "Subscriber" here is a callback invoked when a message targets this
  * agent. The Node server creates one subscriber per live SSE connection;
  * anything else that wants to observe pushes can attach the same way.
+ *
+ * Identity model: `agentId === principal.name`. The broker enforces
+ * this at the register/subscribe call sites (the registry itself is
+ * identity-agnostic so core stays testable without wiring up auth).
+ * A mismatched identity surfaces as `AgentIdentityError`.
  */
 
-import type { Agent, Message } from '@control17/sdk/types';
+import type { Agent, Message, PrincipalKind } from '@control17/sdk/types';
 
 export type Subscriber = (message: Message) => void | Promise<void>;
 
@@ -15,14 +20,36 @@ export interface AgentState {
   subscribers: Set<Subscriber>;
 }
 
+/**
+ * Thrown by `Broker.register` / `Broker.subscribe` when the caller's
+ * authenticated principal doesn't match the agentId they're trying to
+ * act on. Runtime adapters translate this into an HTTP 403.
+ */
+export class AgentIdentityError extends Error {
+  readonly agentId: string;
+  readonly principal: string;
+  constructor(agentId: string, principal: string) {
+    super(
+      `principal '${principal}' cannot act on agent '${agentId}'; ` +
+        `agentId must equal the calling principal's name`,
+    );
+    this.name = 'AgentIdentityError';
+    this.agentId = agentId;
+    this.principal = principal;
+  }
+}
+
 export class AgentRegistry {
   private readonly agents = new Map<string, AgentState>();
 
   /**
    * Look up or create an agent state entry. Updates `lastSeen` on each
-   * call so the list endpoint reflects recent activity.
+   * call so the list endpoint reflects recent activity. If `kind` is
+   * provided on first registration, it becomes the agent's cosmetic
+   * classification; subsequent calls with a different `kind` leave
+   * the existing one in place (first-register-wins).
    */
-  registerOrGet(agentId: string, now: number): AgentState {
+  registerOrGet(agentId: string, now: number, kind: PrincipalKind | null = null): AgentState {
     const existing = this.agents.get(agentId);
     if (existing) {
       existing.agent.lastSeen = now;
@@ -34,6 +61,7 @@ export class AgentRegistry {
         connected: 0,
         createdAt: now,
         lastSeen: now,
+        kind,
       },
       subscribers: new Set(),
     };
@@ -57,6 +85,7 @@ export class AgentRegistry {
         connected: state.subscribers.size,
         createdAt: state.agent.createdAt,
         lastSeen: state.agent.lastSeen,
+        kind: state.agent.kind,
       });
     }
     return out;

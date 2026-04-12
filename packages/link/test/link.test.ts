@@ -2,7 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { FAKE_BROKER_TOKEN, type FakeBroker, startFakeBroker } from './fake-broker.js';
+import {
+  FAKE_BROKER_PRINCIPAL,
+  FAKE_BROKER_TOKEN,
+  type FakeBroker,
+  startFakeBroker,
+} from './fake-broker.js';
 
 interface JsonRpcMessage {
   jsonrpc?: '2.0';
@@ -14,7 +19,9 @@ interface JsonRpcMessage {
 }
 
 const LINK_BINARY = resolve(fileURLToPath(new URL('../dist/index.js', import.meta.url)));
-const AGENT_ID = 'link-test-agent';
+// The link derives its agentId from /whoami, so AGENT_ID here must
+// match whatever the fake broker returns as the principal name.
+const AGENT_ID = FAKE_BROKER_PRINCIPAL;
 
 describe('link binary (spawned subprocess)', () => {
   let broker: FakeBroker;
@@ -29,7 +36,6 @@ describe('link binary (spawned subprocess)', () => {
         ...process.env,
         C17_URL: broker.url,
         C17_TOKEN: FAKE_BROKER_TOKEN,
-        C17_AGENT_ID: AGENT_ID,
       },
       stdio: 'pipe',
     });
@@ -116,23 +122,23 @@ describe('link binary (spawned subprocess)', () => {
     send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   });
 
-  it('lists send, list_agents, and register tools', async () => {
+  it('lists send_dm, broadcast, and list_agents tools', async () => {
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     const response = await waitForMessage((m) => m.id === 2);
     const result = response.result as { tools: Array<{ name: string }> };
     const names = result.tools.map((t) => t.name).sort();
-    expect(names).toEqual(['list_agents', 'register', 'send']);
+    expect(names).toEqual(['broadcast', 'list_agents', 'send_dm']);
   });
 
-  it('send tool issues POST /push to the broker', async () => {
+  it('send_dm tool issues POST /push to the broker', async () => {
     send({
       jsonrpc: '2.0',
       id: 3,
       method: 'tools/call',
       params: {
-        name: 'send',
+        name: 'send_dm',
         arguments: {
-          targetAgentId: 'peer-1',
+          to: 'peer-1',
           body: 'hello from link test',
           title: 'greetings',
           level: 'warning',
@@ -145,12 +151,10 @@ describe('link binary (spawned subprocess)', () => {
     };
     expect(result.content[0]?.text ?? '').toContain('delivered to peer-1');
 
-    // Verify the broker actually received the push
     const lastPush = broker.pushes[broker.pushes.length - 1];
     expect(lastPush?.body).toBe('hello from link test');
     expect(lastPush?.title).toBe('greetings');
     expect(lastPush?.level).toBe('warning');
-    expect(lastPush?.data).toEqual({ from: AGENT_ID });
   });
 
   it('list_agents tool calls GET /agents and renders the result', async () => {
@@ -175,6 +179,7 @@ describe('link binary (spawned subprocess)', () => {
       id: 'msg-forwarded',
       ts: 1_700_000_001_000,
       agentId: AGENT_ID,
+      from: 'alice',
       title: 'build broken',
       body: 'ci failed on main',
       level: 'warning',
@@ -187,6 +192,8 @@ describe('link binary (spawned subprocess)', () => {
       meta: Record<string, string>;
     };
     expect(params.content).toBe('ci failed on main');
+    expect(params.meta.thread).toBe('dm');
+    expect(params.meta.from).toBe('alice');
     expect(params.meta.title).toBe('build broken');
     expect(params.meta.level).toBe('warning');
     expect(params.meta.run).toBe('1234');

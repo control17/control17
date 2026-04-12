@@ -15,6 +15,8 @@ export const PATHS = {
   register: '/register',
   push: '/push',
   subscribe: '/subscribe',
+  whoami: '/whoami',
+  history: '/history',
   mcp: '/mcp',
   events: '/events',
 } as const;
@@ -22,9 +24,11 @@ export const PATHS = {
 export const DEFAULT_PORT = 8717 as const;
 
 export const ENV = {
+  // Client-side: broker URL + bearer token held in env for c17 / c17-link.
   url: 'C17_URL',
   token: 'C17_TOKEN',
-  agentId: 'C17_AGENT_ID',
+  // Server-side: where to find the principal config file + listener config.
+  configPath: 'C17_CONFIG_PATH',
   port: 'C17_PORT',
   host: 'C17_HOST',
   dbPath: 'C17_DB_PATH',

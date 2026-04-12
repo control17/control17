@@ -15,6 +15,8 @@ import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 
+export type ThreadType = 'primary' | 'dm';
+
 export interface ForwarderOptions {
   server: Server;
   brokerClient: BrokerClient;
@@ -57,11 +59,14 @@ async function forwardMessage(
   message: Message,
   log: (msg: string, ctx?: Record<string, unknown>) => void,
 ): Promise<void> {
+  const thread: ThreadType = message.agentId === null ? 'primary' : 'dm';
   const meta: Record<string, string> = {
     msg_id: message.id,
     level: message.level,
     ts: String(message.ts),
+    thread,
   };
+  if (message.from) meta.from = message.from;
   if (message.title) meta.title = message.title;
   if (message.agentId) meta.target = message.agentId;
 

@@ -10,13 +10,37 @@ import { Broker } from '@control17/core';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { logger as defaultLogger, type Logger } from './logger.js';
+import type { PrincipalStore } from './principals.js';
 import { SqliteEventLog } from './sqlite-event-log.js';
 import { SERVER_VERSION } from './version.js';
 
+export {
+  CONFIG_FILE_COMMENT,
+  ConfigNotFoundError,
+  createPrincipalStore,
+  defaultConfigPath,
+  exampleConfig,
+  hashToken,
+  type LoadPrincipalsResult,
+  loadPrincipalsFromFile,
+  loadPrincipalsFromFileVerbose,
+  type Principal,
+  PrincipalLoadError,
+  type PrincipalStore,
+  writeHashedConfig,
+} from './principals.js';
+export {
+  createTtyWizardIO,
+  type RunWizardOptions,
+  runFirstRunWizard,
+  type WizardEntry,
+  type WizardIO,
+} from './wizard.js';
 export { SERVER_VERSION };
 
 export interface RunServerOptions {
-  token: string;
+  /** Fully-loaded principal store. The caller is responsible for building this. */
+  principals: PrincipalStore;
   port: number;
   host?: string;
   dbPath?: string;
@@ -46,7 +70,7 @@ export async function runServer(options: RunServerOptions): Promise<RunningServe
   });
   const app = createApp({
     broker,
-    token: options.token,
+    principals: options.principals,
     version: SERVER_VERSION,
     logger: log,
   });

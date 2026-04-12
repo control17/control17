@@ -22,9 +22,11 @@ import { LINK_VERSION } from './version.js';
 
 const INSTRUCTIONS =
   'Events from the control17 command center arrive as <channel source="c17" level="..." ' +
-  'title="...">body</channel>. Treat each event as a new instruction or situational update ' +
-  'from the operator and react immediately. You can also push to peer agents using the ' +
-  '`send` tool and discover them with `list_agents`.';
+  'thread="primary|dm" from="...">body</channel>. Treat each event as a new instruction ' +
+  'or situational update and react accordingly. ' +
+  'Match the channel: if thread="primary", reply with `broadcast`; if thread="dm", reply ' +
+  'with `send_dm`. Messages where from= is your own name are echoes of your own sends — ' +
+  'do not react to them. Use `list_agents` to discover peers.';
 
 // Never console.log() from a stdio server — stdout is reserved for MCP.
 // All logs go to stderr as structured JSON lines.
@@ -45,7 +47,23 @@ function readRequiredEnv(name: string): string {
 async function main(): Promise<void> {
   const url = readRequiredEnv(ENV.url);
   const token = readRequiredEnv(ENV.token);
-  const agentId = readRequiredEnv(ENV.agentId);
+
+  // The link's agentId is derived from its principal — one principal,
+  // one canonical agentId. We ask the broker who we are before opening
+  // any other connection. If the token is unknown or the server is
+  // down, fail fast with a readable message instead of trying to
+  // register a guessed agentId.
+  const brokerClient = new BrokerClient({ url, token });
+  let agentId: string;
+  try {
+    const who = await brokerClient.whoami();
+    agentId = who.name;
+  } catch (err) {
+    process.stderr.write(
+      `link: whoami failed against ${url}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  }
 
   const server = new Server(
     { name: 'control17', version: LINK_VERSION },
@@ -57,8 +75,6 @@ async function main(): Promise<void> {
       instructions: INSTRUCTIONS,
     },
   );
-
-  const brokerClient = new BrokerClient({ url, token });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: defineTools(agentId),

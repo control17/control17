@@ -36,7 +36,8 @@
     "@control17/core": "workspace:*",
     "@control17/link": "workspace:*",
     "@control17/sdk": "workspace:*",
-    "@control17/server": "workspace:*"
+    "@control17/server": "workspace:*",
+    "@control17/tui": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

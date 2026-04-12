@@ -35,6 +35,10 @@ export interface FakeBroker {
 }
 
 const TOKEN = 'fake-broker-token';
+// Principal the fake broker claims to recognise. The link calls
+// /whoami at startup to self-derive its agentId; this is what it
+// gets back, and what it will then register + subscribe under.
+export const FAKE_BROKER_PRINCIPAL = 'link-test-agent';
 
 export async function startFakeBroker(): Promise<FakeBroker> {
   const pushes: FakeBrokerPush[] = [];
@@ -65,6 +69,12 @@ export async function startFakeBroker(): Promise<FakeBroker> {
       return;
     }
 
+    if (url.pathname === '/whoami' && req.method === 'GET') {
+      res.writeHead(200, jsonHeaders);
+      res.end(JSON.stringify({ name: FAKE_BROKER_PRINCIPAL, kind: 'agent' }));
+      return;
+    }
+
     if (url.pathname === '/register' && req.method === 'POST') {
       const body = await readBody(req);
       const parsed = JSON.parse(body) as { agentId: string };
@@ -89,6 +99,7 @@ export async function startFakeBroker(): Promise<FakeBroker> {
               connected: 1,
               createdAt: 1_700_000_000_000,
               lastSeen: 1_700_000_000_000,
+              kind: 'agent',
             },
           ],
         }),
@@ -108,6 +119,7 @@ export async function startFakeBroker(): Promise<FakeBroker> {
             id: `fake-${pushes.length}`,
             ts: Date.now(),
             agentId: parsed.agentId ?? null,
+            from: FAKE_BROKER_PRINCIPAL,
             title: parsed.title ?? null,
             body: parsed.body,
             level: parsed.level ?? 'info',

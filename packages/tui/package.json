@@ -1,14 +1,14 @@
 {
-  "name": "@control17/cli",
+  "name": "@control17/tui",
   "version": "0.1.1",
-  "description": "Operator CLI for control17 — push events to running agents, list agents, run a local broker.",
+  "description": "Interactive terminal UI for control17 — connect to the squadron net.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
   "homepage": "https://github.com/control17/control17#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/control17/control17.git",
-    "directory": "packages/cli"
+    "directory": "packages/tui"
   },
   "bugs": {
     "url": "https://github.com/control17/control17/issues"
@@ -16,51 +16,41 @@
   "keywords": [
     "control17",
     "c17",
-    "cli",
-    "mcp",
+    "tui",
+    "terminal",
+    "ink",
     "agent",
-    "agent-control-plane",
-    "operator"
+    "chat"
   ],
   "type": "module",
   "main": "./dist/index.js",
-  "bin": {
-    "c17": "./dist/index.js"
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsup",
-    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@control17/sdk": "workspace:*"
-  },
-  "peerDependencies": {
-    "@control17/link": "workspace:*",
-    "@control17/server": "workspace:*",
-    "@control17/tui": "workspace:*"
-  },
-  "peerDependenciesMeta": {
-    "@control17/link": {
-      "optional": true
-    },
-    "@control17/server": {
-      "optional": true
-    },
-    "@control17/tui": {
-      "optional": true
-    }
+    "@control17/sdk": "workspace:*",
+    "chalk": "^5.6.2",
+    "ink": "^5.1.0",
+    "react": "^18.3.0",
+    "strip-ansi": "^7.2.0",
+    "wrap-ansi": "^10.0.0"
   },
   "devDependencies": {
-    "@control17/link": "workspace:*",
-    "@control17/server": "workspace:*",
-    "@control17/tui": "workspace:*",
     "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0",
     "vitest": "^4.0.0"

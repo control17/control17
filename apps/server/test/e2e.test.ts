@@ -16,6 +16,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@control17/sdk/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createPrincipalStore } from '../src/principals.js';
 import { type RunningServer, runServer } from '../src/run.js';
 
 interface JsonRpcMessage {
@@ -30,9 +31,15 @@ interface JsonRpcMessage {
 const LINK_BINARY = resolve(
   fileURLToPath(new URL('../../../packages/link/dist/index.js', import.meta.url)),
 );
+// agentId === principal.name is enforced by the broker. Three
+// principals exercise: operator → agent (alice → e2e-agent), and
+// agent-as-operator (e2e-agent → e2e-peer). Each principal registers
+// itself; nobody can register on behalf of another.
 const AGENT_ID = 'e2e-agent';
 const PEER_AGENT_ID = 'e2e-peer';
-const TOKEN = 'e2e-token';
+const ALICE_TOKEN = 'c17_test_alice';
+const AGENT_TOKEN = 'c17_test_agent';
+const PEER_TOKEN = 'c17_test_peer';
 
 describe('end-to-end: operator → broker → link → channel event', () => {
   let server: RunningServer;
@@ -43,8 +50,13 @@ describe('end-to-end: operator → broker → link → channel event', () => {
   let stdoutBuf = '';
 
   beforeAll(async () => {
+    const principals = createPrincipalStore([
+      { name: 'alice', kind: 'human', token: ALICE_TOKEN },
+      { name: AGENT_ID, kind: 'agent', token: AGENT_TOKEN },
+      { name: PEER_AGENT_ID, kind: 'agent', token: PEER_TOKEN },
+    ]);
     server = await runServer({
-      token: TOKEN,
+      principals,
       port: 0,
       host: '127.0.0.1',
       dbPath: ':memory:',
@@ -57,7 +69,7 @@ describe('end-to-end: operator → broker → link → channel event', () => {
       },
     });
     const url = `http://${server.host}:${server.port}`;
-    client = new Client({ url, token: TOKEN });
+    client = new Client({ url, token: ALICE_TOKEN });
 
     // Sanity-check the server is up before spawning the link.
     const health = await client.health();
@@ -67,8 +79,7 @@ describe('end-to-end: operator → broker → link → channel event', () => {
       env: {
         ...process.env,
         C17_URL: url,
-        C17_TOKEN: TOKEN,
-        C17_AGENT_ID: AGENT_ID,
+        C17_TOKEN: AGENT_TOKEN,
       },
       stdio: 'pipe',
     });
@@ -156,8 +167,14 @@ describe('end-to-end: operator → broker → link → channel event', () => {
   });
 
   it('agent-as-operator: link send tool reaches the broker and back', async () => {
-    // Register a peer so the send tool has a valid target.
-    await client.register(PEER_AGENT_ID);
+    // Register the peer under its own token — the broker enforces
+    // agentId === principal.name, so alice cannot register on behalf
+    // of the peer.
+    const peerClient = new Client({
+      url: `http://${server.host}:${server.port}`,
+      token: PEER_TOKEN,
+    });
+    await peerClient.register(PEER_AGENT_ID);
 
     link.stdin.write(
       `${JSON.stringify({
@@ -165,9 +182,9 @@ describe('end-to-end: operator → broker → link → channel event', () => {
         id: 42,
         method: 'tools/call',
         params: {
-          name: 'send',
+          name: 'send_dm',
           arguments: {
-            targetAgentId: PEER_AGENT_ID,
+            to: PEER_AGENT_ID,
             body: 'agent-originated message',
             title: 'hello from e2e-agent',
             level: 'info',

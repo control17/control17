@@ -1,20 +1,25 @@
 /**
  * `c17 serve` — start a local control17 broker.
  *
- * This is a thin launcher. `@control17/server` is an *optional* peer
- * dependency of the CLI so that users who only ever push events don't
- * drag in Hono, better-sqlite3 (native addon!), and the MCP server SDK.
- * When the user invokes `c17 serve`, we dynamically import the server
- * at runtime. If it isn't installed, we exit with a friendly hint.
+ * Thin launcher. `@control17/server` is an *optional* peer dependency
+ * of the CLI so that users who only ever push events don't drag in
+ * Hono, node:sqlite, and the MCP server SDK. When the user invokes
+ * `c17 serve`, we dynamically import the server at runtime. If it
+ * isn't installed, we exit with a friendly hint.
+ *
+ * Auth comes from a JSON principal config file. The CLI forwards the
+ * resolved path to the server module; on a missing file we drop into
+ * the same first-run wizard `c17-server` uses, so the two entry points
+ * stay consistent.
  */
 
 import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 
 // Type-only import: compiles away, never loaded at runtime.
-import type { RunningServer } from '@control17/server';
+import type { PrincipalStore, RunningServer } from '@control17/server';
 
 export interface ServeCommandInput {
-  token?: string;
+  configPath?: string;
   port?: number;
   host?: string;
   dbPath?: string;
@@ -31,12 +36,6 @@ export async function runServeCommand(
   input: ServeCommandInput,
   stdout: (line: string) => void,
 ): Promise<RunningServer> {
-  const token = input.token ?? process.env[ENV.token];
-  if (!token) {
-    throw new UsageError(
-      `serve: --token or ${ENV.token} env is required (shared secret for /push and /agents)`,
-    );
-  }
   const port = input.port ?? Number(process.env[ENV.port] ?? String(DEFAULT_PORT));
   if (Number.isNaN(port) || port < 1 || port > 65_535) {
     throw new UsageError(`serve: invalid port ${port}`);
@@ -44,30 +43,85 @@ export async function runServeCommand(
   const host = input.host ?? process.env[ENV.host] ?? '127.0.0.1';
   const dbPath = input.dbPath ?? process.env[ENV.dbPath] ?? ':memory:';
 
-  const runServer = await loadRunServer();
+  const server = await loadServerModule();
+  const configPath = input.configPath ?? process.env[ENV.configPath] ?? server.defaultConfigPath();
 
-  const running = await runServer({
-    token,
+  const principals = await loadOrCreatePrincipals(server, configPath, stdout);
+
+  const running = await server.runServer({
+    principals,
     port,
     host,
     dbPath,
     onListen: (info) => {
-      stdout(`control17-server listening on http://${info.address}:${info.port} (db: ${dbPath})`);
+      stdout(
+        `control17-server listening on http://${info.address}:${info.port}\n` +
+          `  config: ${configPath}\n` +
+          `  db:     ${dbPath}\n` +
+          `  tokens: ${principals.size()} (${principals.names().join(', ')})`,
+      );
     },
   });
 
   return running;
 }
 
-/**
- * Dynamically resolve `@control17/server`'s `runServer` export. If the
- * package isn't installed (it's an optional peer), throw a UsageError
- * with install instructions rather than a raw MODULE_NOT_FOUND trace.
- */
-async function loadRunServer(): Promise<typeof import('@control17/server')['runServer']> {
+async function loadOrCreatePrincipals(
+  server: typeof import('@control17/server'),
+  configPath: string,
+  stdout: (line: string) => void,
+): Promise<PrincipalStore> {
   try {
-    const mod = await import('@control17/server');
-    return mod.runServer;
+    const { store, migrated } = server.loadPrincipalsFromFileVerbose(configPath);
+    if (migrated > 0) {
+      stdout(`c17 serve: hashed ${migrated} plaintext token(s) in ${configPath}`);
+    }
+    return store;
+  } catch (err) {
+    if (err instanceof server.ConfigNotFoundError) {
+      return runWizardOrFail(server, configPath);
+    }
+    if (err instanceof server.PrincipalLoadError) {
+      throw new UsageError(`serve: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
+async function runWizardOrFail(
+  server: typeof import('@control17/server'),
+  configPath: string,
+): Promise<PrincipalStore> {
+  const { io, close } = server.createTtyWizardIO();
+  if (!io.isInteractive) {
+    close();
+    throw new UsageError(
+      `serve: no config file at ${configPath}\n` +
+        '  stdin is not a TTY, so the first-run wizard cannot prompt. Create\n' +
+        '  the file yourself or pass --config-path to point at a file you already have.\n' +
+        `  example config:\n\n${server.exampleConfig()}`,
+    );
+  }
+  try {
+    return await server.runFirstRunWizard({ configPath, io });
+  } catch (err) {
+    if (err instanceof server.PrincipalLoadError) {
+      throw new UsageError(`serve: ${err.message}`);
+    }
+    throw err;
+  } finally {
+    close();
+  }
+}
+
+/**
+ * Dynamically resolve the full server module. If the package isn't
+ * installed (it's an optional peer), throw a UsageError with install
+ * instructions rather than a raw MODULE_NOT_FOUND trace.
+ */
+async function loadServerModule(): Promise<typeof import('@control17/server')> {
+  try {
+    return await import('@control17/server');
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') {

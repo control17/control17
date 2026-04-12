@@ -11,17 +11,21 @@ import {
   AgentListSchema,
   AgentRegistrationSchema,
   HealthResponseSchema,
+  HistoryResponseSchema,
   MessageSchema,
   PushPayloadSchema,
   PushResultSchema,
+  WhoamiResponseSchema,
 } from './schemas.js';
 import type {
   Agent,
   AgentRegistration,
   HealthResponse,
+  HistoryQuery,
   Message,
   PushPayload,
   PushResult,
+  WhoamiResponse,
 } from './types.js';
 
 export interface ClientOptions {
@@ -92,6 +96,28 @@ export class Client {
   async health(): Promise<HealthResponse> {
     const resp = await this.request(PATHS.health, { method: 'GET', skipAuth: true });
     return HealthResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Ask the broker which principal the current bearer token maps to.
+   * Used by the link / TUI to self-derive their canonical agentId at
+   * startup without requiring a separate `C17_AGENT_ID` env var.
+   */
+  async whoami(): Promise<WhoamiResponse> {
+    const resp = await this.request(PATHS.whoami, { method: 'GET' });
+    return WhoamiResponseSchema.parse(await this.json(resp));
+  }
+
+  async history(query: HistoryQuery = {}): Promise<Message[]> {
+    const params = new URLSearchParams();
+    if (query.with) params.set('with', query.with);
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.before !== undefined) params.set('before', String(query.before));
+    const qs = params.toString();
+    const path = qs ? `${PATHS.history}?${qs}` : PATHS.history;
+    const resp = await this.request(path, { method: 'GET' });
+    const parsed = HistoryResponseSchema.parse(await this.json(resp));
+    return parsed.messages;
   }
 
   async register(agentId: string): Promise<AgentRegistration> {
