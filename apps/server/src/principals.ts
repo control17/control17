@@ -69,7 +69,7 @@ const TokenEntrySchema = z
       .min(1)
       .max(128)
       .regex(NAME_REGEX, 'name must be alphanumeric with . _ - allowed'),
-    kind: z.enum(['human', 'agent', 'service']),
+    kind: z.string().min(1).max(64),
     token: z.string().min(8, 'token must be at least 8 characters').optional(),
     tokenHash: z
       .string()
@@ -320,9 +320,9 @@ export function writeHashedConfig(
  */
 export const CONFIG_FILE_COMMENT =
   'control17 server config. Each token entry has { name, kind, tokenHash }. ' +
-  'To rotate or add a principal by hand, add { "name": "...", "kind": "human|agent|service", "token": "<plaintext>" } ' +
+  'To rotate or add a principal by hand, add { "name": "...", "kind": "<any label>", "token": "<plaintext>" } ' +
   'and the server will hash it on next boot and rewrite this file. ' +
-  '`kind` is cosmetic — it labels the principal in logs but does not gate auth.';
+  '`kind` is freeform (e.g. operator, agent, service) — labels the principal in logs but does not gate auth.';
 
 /**
  * Example config, used in error messages and as a reference document.
@@ -331,7 +331,7 @@ export function exampleConfig(): string {
   return `{
   "_comment": "${CONFIG_FILE_COMMENT}",
   "tokens": [
-    { "name": "alice", "kind": "human", "token": "c17_change_me_to_a_real_secret" }
+    { "name": "operator", "kind": "operator", "token": "c17_change_me_to_a_real_secret" }
   ]
 }`;
 }

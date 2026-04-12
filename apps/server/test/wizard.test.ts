@@ -64,19 +64,19 @@ describe('runFirstRunWizard', () => {
     });
 
     expect(store.size()).toBe(1);
-    expect(store.resolve('c17_test_token_1')?.name).toBe('alice');
+    expect(store.resolve('c17_test_token_1')?.name).toBe('operator');
 
     const onDisk = JSON.parse(readFileSync(configPath, 'utf8')) as {
       tokens: Array<{ name: string; kind: string; tokenHash: string }>;
     };
     expect(onDisk.tokens).toHaveLength(1);
-    expect(onDisk.tokens[0]?.name).toBe('alice');
-    expect(onDisk.tokens[0]?.kind).toBe('human');
+    expect(onDisk.tokens[0]?.name).toBe('operator');
+    expect(onDisk.tokens[0]?.kind).toBe('operator');
     expect(onDisk.tokens[0]?.tokenHash).toMatch(/^sha256:/);
 
     // File can be re-loaded round-trip.
     const reloaded = loadPrincipalsFromFile(configPath);
-    expect(reloaded.resolve('c17_test_token_1')?.name).toBe('alice');
+    expect(reloaded.resolve('c17_test_token_1')?.name).toBe('operator');
   });
 
   it('collects multiple identities when the operator says yes', async () => {
@@ -84,7 +84,7 @@ describe('runFirstRunWizard', () => {
     let tokenCounter = 0;
     const io = mockIO([
       'alice', // name 1
-      'human', // kind 1
+      'operator', // kind 1
       '', // press enter
       'y', // more?
       'build-bot', // name 2
@@ -105,14 +105,13 @@ describe('runFirstRunWizard', () => {
     expect(store.resolve('c17_test_token_2')?.kind).toBe('agent');
   });
 
-  it('re-prompts on invalid name and kind', async () => {
+  it('re-prompts on invalid name and accepts freeform kind', async () => {
     const configPath = tmpConfigPath();
     const io = mockIO([
       'has spaces', // invalid name
       'also invalid!', // still invalid
       'valid-name', // accepted
-      'wizard', // invalid kind
-      'service', // accepted
+      'custom-role', // freeform kind — accepted
       '', // press enter
       'n', // no more
     ]);
@@ -125,9 +124,8 @@ describe('runFirstRunWizard', () => {
 
     expect(store.size()).toBe(1);
     expect(store.resolve('c17_mocked_token')?.name).toBe('valid-name');
-    expect(store.resolve('c17_mocked_token')?.kind).toBe('service');
+    expect(store.resolve('c17_mocked_token')?.kind).toBe('custom-role');
     expect(io.output.some((l) => l.includes('alphanumeric'))).toBe(true);
-    expect(io.output.some((l) => l.includes('kind must be'))).toBe(true);
   });
 
   it('rejects a duplicate name within the same session', async () => {

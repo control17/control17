@@ -10,7 +10,7 @@ import { z } from 'zod';
 
 export const LogLevelSchema = z.enum(['debug', 'info', 'notice', 'warning', 'error', 'critical']);
 
-export const PrincipalKindSchema = z.enum(['human', 'agent', 'service']);
+export const PrincipalKindSchema = z.string().min(1).max(64);
 
 export const AgentIdSchema = z
   .string()

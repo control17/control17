@@ -1,9 +1,9 @@
 {
-  "_comment": "control17 server config. Each token entry has { name, kind, tokenHash }. To rotate or add a principal by hand, add { \"name\": \"...\", \"kind\": \"human|agent|service\", \"token\": \"<plaintext>\" } and the server will hash it on next boot and rewrite this file. `kind` is cosmetic — it labels the principal in logs but does not gate auth.",
+  "_comment": "control17 server config. Each token entry has { name, kind, tokenHash }. To rotate or add a principal by hand, add { \"name\": \"...\", \"kind\": \"<any label>\", \"token\": \"<plaintext>\" } and the server will hash it on next boot and rewrite this file. `kind` is freeform (e.g. operator, agent, service, ci, monitor) — it labels the principal in logs but does not gate auth.",
   "tokens": [
     {
-      "name": "alice",
-      "kind": "human",
+      "name": "operator",
+      "kind": "operator",
       "token": "c17_dev_replace_me_with_a_random_secret"
     },
     {

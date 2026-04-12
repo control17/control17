@@ -178,10 +178,20 @@ describe('loadPrincipalsFromFile', () => {
     expect(() => loadPrincipalsFromFile(path)).toThrow(/at least one entry/);
   });
 
-  it('rejects invalid principal kind', () => {
+  it('accepts any freeform kind string', () => {
     const path = writeConfig(
       JSON.stringify({
-        tokens: [{ name: 'alice', kind: 'wizard', token: 'c17_alice_secret' }],
+        tokens: [{ name: 'alice', kind: 'custom-role', token: 'c17_alice_secret' }],
+      }),
+    );
+    const store = loadPrincipalsFromFile(path);
+    expect(store.resolve('c17_alice_secret')?.kind).toBe('custom-role');
+  });
+
+  it('rejects empty kind', () => {
+    const path = writeConfig(
+      JSON.stringify({
+        tokens: [{ name: 'alice', kind: '', token: 'c17_alice_secret' }],
       }),
     );
     expect(() => loadPrincipalsFromFile(path)).toThrow();

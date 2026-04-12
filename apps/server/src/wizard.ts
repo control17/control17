@@ -125,7 +125,7 @@ async function collectEntry(
 }
 
 async function promptName(io: WizardIO, usedNames: Set<string>, first: boolean): Promise<string> {
-  const suggested = first ? 'alice' : '';
+  const suggested = first ? 'operator' : '';
   const prompt = suggested ? `name [${suggested}]: ` : 'name: ';
   while (true) {
     const raw = (await io.prompt(prompt)).trim();
@@ -152,12 +152,13 @@ async function promptName(io: WizardIO, usedNames: Set<string>, first: boolean):
 
 async function promptKind(io: WizardIO): Promise<PrincipalKind> {
   while (true) {
-    const raw = (await io.prompt('kind [human|agent|service] (default: human): '))
-      .trim()
-      .toLowerCase();
-    if (raw.length === 0) return 'human';
-    if (raw === 'human' || raw === 'agent' || raw === 'service') return raw;
-    io.println('  kind must be human, agent, or service');
+    const raw = (await io.prompt('kind (e.g. operator, agent, service): ')).trim().toLowerCase();
+    if (raw.length === 0) return 'operator';
+    if (raw.length > 64) {
+      io.println('  kind must be 64 characters or fewer');
+      continue;
+    }
+    return raw;
   }
 }
 

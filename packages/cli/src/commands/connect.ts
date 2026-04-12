@@ -25,7 +25,7 @@ export async function runConnectCommand(input: ConnectCommandInput): Promise<voi
   const { Client } = await import('@control17/sdk/client');
   const client = new Client({ url: input.url, token: input.token });
 
-  let who: { name: string; kind: 'human' | 'agent' | 'service' };
+  let who: { name: string; kind: string };
   try {
     who = await client.whoami();
   } catch (err) {

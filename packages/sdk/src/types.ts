@@ -10,11 +10,10 @@ export type LogLevel = 'debug' | 'info' | 'notice' | 'warning' | 'error' | 'crit
 /**
  * Cosmetic classification of a principal (named-token holder). Never
  * gates wire-level behavior — the broker treats every kind identically.
- * Exists so dashboards and tools can label participants consistently
- * (`human` for interactive operators, `agent` for Claude Code sessions
- * and other long-lived bots, `service` for webhooks / CI tokens).
+ * Freeform string so operators can label participants however they want.
+ * Suggested defaults: `operator`, `agent`, `service`.
  */
-export type PrincipalKind = 'human' | 'agent' | 'service';
+export type PrincipalKind = string;
 
 export interface Agent {
   agentId: string;
