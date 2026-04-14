@@ -1,10 +1,10 @@
 /**
  * Broker → stdio forwarder.
  *
- * Opens a long-lived SSE subscription to the broker for this agent id
- * and relays every inbound message as a `notifications/claude/channel`
- * JSON-RPC notification on the link's MCP stdio server. Reconnects
- * with exponential backoff on any error.
+ * Opens a long-lived SSE subscription to the broker for this slot's
+ * callsign and relays every inbound message as a
+ * `notifications/claude/channel` JSON-RPC notification on the link's
+ * MCP stdio server. Reconnects with exponential backoff on any error.
  */
 
 import type { Client as BrokerClient } from '@control17/sdk/client';
@@ -20,22 +20,31 @@ export type ThreadType = 'primary' | 'dm';
 export interface ForwarderOptions {
   server: Server;
   brokerClient: BrokerClient;
-  agentId: string;
+  callsign: string;
   signal: AbortSignal;
   log: (msg: string, ctx?: Record<string, unknown>) => void;
 }
 
 export async function runForwarder(opts: ForwarderOptions): Promise<void> {
-  const { server, brokerClient, agentId, signal, log } = opts;
+  const { server, brokerClient, callsign, signal, log } = opts;
   let backoff = BACKOFF_START_MS;
 
   while (!signal.aborted) {
     try {
-      await brokerClient.register(agentId);
-      log('registered with broker', { agentId });
+      log('subscribing to broker', { callsign });
       backoff = BACKOFF_START_MS;
 
-      for await (const message of brokerClient.subscribe(agentId, signal)) {
+      for await (const message of brokerClient.subscribe(callsign, signal)) {
+        // Self-echo suppression: the broker fans out every push to all
+        // subscribers INCLUDING the sender, so our own sends come back
+        // on the SSE stream. Forwarding those to the MCP client would
+        // cost the agent a turn to recognise and discard its own
+        // output. Filter them here instead — the agent should never
+        // see its own broadcast/send as an incoming channel event.
+        // `recent` (history) still returns self-sends, which is the
+        // right behaviour: scrollback is supposed to include what you
+        // said. Only the live stream is filtered.
+        if (message.from === callsign) continue;
         await forwardMessage(server, message, log);
       }
 
@@ -53,6 +62,24 @@ export async function runForwarder(opts: ForwarderOptions): Promise<void> {
     backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
   }
 }
+
+/**
+ * Meta keys the broker owns authoritatively. Anything a sender places
+ * in `message.data` with one of these names is silently dropped so a
+ * malicious push cannot spoof `from`, `thread`, `level`, etc. on the
+ * receiving side. This mirrors the broker-side guarantee that
+ * `message.from` is stamped from the authenticated slot and never from
+ * the payload — same invariant, one layer down.
+ */
+const RESERVED_META_KEYS: ReadonlySet<string> = new Set([
+  'msg_id',
+  'level',
+  'ts',
+  'thread',
+  'from',
+  'title',
+  'target',
+]);
 
 async function forwardMessage(
   server: Server,
@@ -75,6 +102,8 @@ async function forwardMessage(
       if (v === null || v === undefined) continue;
       const key = sanitizeMetaKey(k);
       if (!key) continue;
+      // Skip reserved keys — a sender cannot override broker-stamped meta.
+      if (RESERVED_META_KEYS.has(key)) continue;
       if (typeof v === 'string') {
         meta[key] = v;
       } else if (typeof v === 'number' || typeof v === 'boolean') {

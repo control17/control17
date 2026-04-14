@@ -11,14 +11,18 @@ export const AUTH_HEADER = 'Authorization' as const;
 
 export const PATHS = {
   health: '/healthz',
-  agents: '/agents',
-  register: '/register',
+  briefing: '/briefing',
+  roster: '/roster',
   push: '/push',
   subscribe: '/subscribe',
-  whoami: '/whoami',
   history: '/history',
-  mcp: '/mcp',
-  events: '/events',
+  // Human-plane session management (TOTP login + session cookie).
+  sessionTotp: '/session/totp',
+  sessionLogout: '/session/logout',
+  session: '/session',
+  // Web Push (browser) — VAPID public key + per-device subscriptions.
+  pushVapidPublicKey: '/push/vapid-public-key',
+  pushSubscriptions: '/push/subscriptions',
 } as const;
 
 export const DEFAULT_PORT = 8717 as const;
@@ -27,7 +31,7 @@ export const ENV = {
   // Client-side: broker URL + bearer token held in env for c17 / c17-link.
   url: 'C17_URL',
   token: 'C17_TOKEN',
-  // Server-side: where to find the principal config file + listener config.
+  // Server-side: where to find the team config file + listener config.
   configPath: 'C17_CONFIG_PATH',
   port: 'C17_PORT',
   host: 'C17_HOST',

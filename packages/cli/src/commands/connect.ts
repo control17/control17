@@ -2,11 +2,12 @@
  * `c17 connect` — interactive terminal UI for the control17 net.
  *
  * `@control17/tui` is an optional peer dep of the CLI so that users
- * who only need push/agents don't drag in Ink, React, and their tree.
+ * who only need push/roster don't drag in Ink, React, and their tree.
  * When the user invokes `c17 connect`, we dynamically import the TUI
  * module; if it isn't installed, we exit with a friendly hint.
  */
 
+import type { BriefingResponse } from '@control17/sdk/types';
 import type { ConnectUIOptions } from '@control17/tui';
 
 export class UsageError extends Error {
@@ -25,22 +26,18 @@ export async function runConnectCommand(input: ConnectCommandInput): Promise<voi
   const { Client } = await import('@control17/sdk/client');
   const client = new Client({ url: input.url, token: input.token });
 
-  let who: { name: string; kind: string };
+  let briefing: BriefingResponse;
   try {
-    who = await client.whoami();
+    briefing = await client.briefing();
   } catch (err) {
     throw new UsageError(
-      `connect: failed to identify with broker at ${input.url}: ` +
+      `connect: failed to fetch briefing from ${input.url}: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
   const tui = await loadTuiModule();
-  const options: ConnectUIOptions = {
-    client,
-    principalName: who.name,
-    principalKind: who.kind,
-  };
+  const options: ConnectUIOptions = { client, briefing };
 
   await tui.runConnectUI(options);
 }

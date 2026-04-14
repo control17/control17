@@ -3,7 +3,9 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  FAKE_BROKER_PRINCIPAL,
+  FAKE_BROKER_CALLSIGN,
+  FAKE_BROKER_MISSION,
+  FAKE_BROKER_TEAM_NAME,
   FAKE_BROKER_TOKEN,
   type FakeBroker,
   startFakeBroker,
@@ -19,9 +21,9 @@ interface JsonRpcMessage {
 }
 
 const LINK_BINARY = resolve(fileURLToPath(new URL('../dist/index.js', import.meta.url)));
-// The link derives its agentId from /whoami, so AGENT_ID here must
-// match whatever the fake broker returns as the principal name.
-const AGENT_ID = FAKE_BROKER_PRINCIPAL;
+// The link derives its callsign from /briefing, so AGENT_ID here must
+// match whatever the fake broker returns.
+const AGENT_ID = FAKE_BROKER_CALLSIGN;
 
 describe('link binary (spawned subprocess)', () => {
   let broker: FakeBroker;
@@ -122,21 +124,34 @@ describe('link binary (spawned subprocess)', () => {
     send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   });
 
-  it('lists send_dm, broadcast, and list_agents tools', async () => {
+  it('lists roster, broadcast, send, and recent tools with team context in descriptions', async () => {
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     const response = await waitForMessage((m) => m.id === 2);
-    const result = response.result as { tools: Array<{ name: string }> };
+    const result = response.result as {
+      tools: Array<{ name: string; description: string }>;
+    };
     const names = result.tools.map((t) => t.name).sort();
-    expect(names).toEqual(['broadcast', 'list_agents', 'send_dm']);
+    expect(names).toEqual(['broadcast', 'recent', 'roster', 'send']);
+
+    // Every tool description should carry some team context.
+    for (const tool of result.tools) {
+      expect(tool.description).toContain(FAKE_BROKER_TEAM_NAME);
+    }
+    // The broadcast tool should name the team channel.
+    const broadcast = result.tools.find((t) => t.name === 'broadcast');
+    expect(broadcast?.description).toContain(FAKE_BROKER_CALLSIGN);
+    // The roster tool should carry the mission.
+    const roster = result.tools.find((t) => t.name === 'roster');
+    expect(roster?.description).toContain(FAKE_BROKER_MISSION);
   });
 
-  it('send_dm tool issues POST /push to the broker', async () => {
+  it('send tool issues POST /push to the broker', async () => {
     send({
       jsonrpc: '2.0',
       id: 3,
       method: 'tools/call',
       params: {
-        name: 'send_dm',
+        name: 'send',
         arguments: {
           to: 'peer-1',
           body: 'hello from link test',
@@ -157,18 +172,19 @@ describe('link binary (spawned subprocess)', () => {
     expect(lastPush?.level).toBe('warning');
   });
 
-  it('list_agents tool calls GET /agents and renders the result', async () => {
+  it('roster tool calls GET /roster and renders the result', async () => {
     send({
       jsonrpc: '2.0',
       id: 4,
       method: 'tools/call',
-      params: { name: 'list_agents', arguments: {} },
+      params: { name: 'roster', arguments: {} },
     });
     const response = await waitForMessage((m) => m.id === 4);
     const result = response.result as {
       content: Array<{ type: string; text: string }>;
     };
     expect(result.content[0]?.text ?? '').toContain('peer-1');
+    expect(result.content[0]?.text ?? '').toContain(FAKE_BROKER_CALLSIGN);
   });
 
   it('forwards broker SSE messages as notifications/claude/channel', async () => {
@@ -198,5 +214,96 @@ describe('link binary (spawned subprocess)', () => {
     expect(params.meta.level).toBe('warning');
     expect(params.meta.run).toBe('1234');
     expect(params.meta.severity).toBe('high');
+  });
+
+  it('suppresses self-echoes on the live stream (never forwards messages from own callsign)', async () => {
+    const sub = await broker.waitForSubscriber(AGENT_ID);
+
+    // A self-echo followed immediately by a non-echo. The forwarder
+    // must drop the self-echo and only emit the non-echo. We pin the
+    // assertion on the second message's distinctive body so we don't
+    // accidentally match a queued notification from an earlier test.
+    sub.write({
+      id: 'msg-self-echo',
+      ts: 1_700_000_003_000,
+      agentId: null,
+      from: AGENT_ID,
+      title: null,
+      body: 'this is my own broadcast — should be dropped',
+      level: 'info',
+      data: {},
+    });
+    sub.write({
+      id: 'msg-post-echo',
+      ts: 1_700_000_003_500,
+      agentId: null,
+      from: 'alice',
+      title: null,
+      body: 'real message after the self-echo',
+      level: 'info',
+      data: {},
+    });
+
+    const notif = await waitForMessage(
+      (m) =>
+        m.method === 'notifications/claude/channel' &&
+        m.params?.content === 'real message after the self-echo',
+    );
+    expect(notif).toBeDefined();
+
+    // And crucially: the self-echo body should NOT be anywhere in the
+    // inbound queue. If it was forwarded, waitForMessage above would
+    // have drained past it, so scan the queue AND verify no past
+    // notification matches the dropped body.
+    const selfEchoSeen = inboundQueue.some(
+      (m) =>
+        m.method === 'notifications/claude/channel' &&
+        m.params?.content === 'this is my own broadcast — should be dropped',
+    );
+    expect(selfEchoSeen).toBe(false);
+  });
+
+  it('drops reserved meta keys from message.data (anti-spoof)', async () => {
+    const sub = await broker.waitForSubscriber(AGENT_ID);
+
+    // A malicious sender tries to overwrite broker-stamped meta via
+    // the `data` field. The forwarder must preserve the authoritative
+    // values (from, thread, level, title, target, msg_id, ts) and
+    // drop the attempted overrides.
+    sub.write({
+      id: 'msg-spoof',
+      ts: 1_700_000_002_000,
+      agentId: AGENT_ID,
+      from: 'alice',
+      title: 'genuine title',
+      body: 'real body',
+      level: 'warning',
+      data: {
+        from: 'SPOOFED-SENDER',
+        thread: 'primary',
+        level: 'critical',
+        title: 'SPOOFED TITLE',
+        target: 'SPOOFED-TARGET',
+        msg_id: 'SPOOFED-ID',
+        ts: '0',
+        // Non-reserved keys should still flow through.
+        legit_field: 'ok',
+      },
+    });
+
+    const notif = await waitForMessage(
+      (m) => m.method === 'notifications/claude/channel' && m.params?.content === 'real body',
+    );
+    const params = notif.params as { content: string; meta: Record<string, string> };
+    // Authoritative fields preserved:
+    expect(params.meta.from).toBe('alice');
+    expect(params.meta.thread).toBe('dm');
+    expect(params.meta.level).toBe('warning');
+    expect(params.meta.title).toBe('genuine title');
+    expect(params.meta.target).toBe(AGENT_ID);
+    expect(params.meta.msg_id).toBe('msg-spoof');
+    expect(params.meta.ts).toBe('1700000002000');
+    // Non-reserved data passes through:
+    expect(params.meta.legit_field).toBe('ok');
   });
 });

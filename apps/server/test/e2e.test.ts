@@ -1,5 +1,5 @@
 /**
- * End-to-end test for control17's first slice.
+ * End-to-end test for control17's team control plane.
  *
  * Brings up the real server (in-process via `runServer`), spawns the
  * real link binary as a subprocess, and drives the full loop:
@@ -15,9 +15,10 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@control17/sdk/client';
+import type { Role, Team } from '@control17/sdk/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createPrincipalStore } from '../src/principals.js';
 import { type RunningServer, runServer } from '../src/run.js';
+import { createSlotStore } from '../src/slots.js';
 
 interface JsonRpcMessage {
   jsonrpc?: '2.0';
@@ -31,15 +32,32 @@ interface JsonRpcMessage {
 const LINK_BINARY = resolve(
   fileURLToPath(new URL('../../../packages/link/dist/index.js', import.meta.url)),
 );
-// agentId === principal.name is enforced by the broker. Three
-// principals exercise: operator → agent (alice → e2e-agent), and
-// agent-as-operator (e2e-agent → e2e-peer). Each principal registers
-// itself; nobody can register on behalf of another.
+// agentId === slot.callsign is enforced by the broker. Three
+// slots exercise: operator → agent (ACTUAL → e2e-agent), and
+// agent-as-operator (e2e-agent → e2e-peer).
 const AGENT_ID = 'e2e-agent';
 const PEER_AGENT_ID = 'e2e-peer';
-const ALICE_TOKEN = 'c17_test_alice';
+const OP_TOKEN = 'c17_test_operator';
 const AGENT_TOKEN = 'c17_test_agent';
 const PEER_TOKEN = 'c17_test_peer';
+
+const TEAM: Team = {
+  name: 'e2e-squadron',
+  mission: 'Exercise the full control17 stack end-to-end.',
+  brief: '',
+};
+
+const ROLES: Record<string, Role> = {
+  operator: {
+    description: 'Directs the team.',
+    instructions: 'Lead.',
+    editor: true,
+  },
+  implementer: {
+    description: 'Writes code.',
+    instructions: 'Ship work.',
+  },
+};
 
 describe('end-to-end: operator → broker → link → channel event', () => {
   let server: RunningServer;
@@ -50,13 +68,15 @@ describe('end-to-end: operator → broker → link → channel event', () => {
   let stdoutBuf = '';
 
   beforeAll(async () => {
-    const principals = createPrincipalStore([
-      { name: 'alice', kind: 'human', token: ALICE_TOKEN },
-      { name: AGENT_ID, kind: 'agent', token: AGENT_TOKEN },
-      { name: PEER_AGENT_ID, kind: 'agent', token: PEER_TOKEN },
+    const slots = createSlotStore([
+      { callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN },
+      { callsign: AGENT_ID, role: 'implementer', token: AGENT_TOKEN },
+      { callsign: PEER_AGENT_ID, role: 'implementer', token: PEER_TOKEN },
     ]);
     server = await runServer({
-      principals,
+      slots,
+      team: TEAM,
+      roles: ROLES,
       port: 0,
       host: '127.0.0.1',
       dbPath: ':memory:',
@@ -69,7 +89,7 @@ describe('end-to-end: operator → broker → link → channel event', () => {
       },
     });
     const url = `http://${server.host}:${server.port}`;
-    client = new Client({ url, token: ALICE_TOKEN });
+    client = new Client({ url, token: OP_TOKEN });
 
     // Sanity-check the server is up before spawning the link.
     const health = await client.health();
@@ -125,10 +145,10 @@ describe('end-to-end: operator → broker → link → channel event', () => {
       `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
     );
 
-    // Wait until the link registers AND subscribes (connected > 0).
+    // Wait until the link subscribes (connected > 0).
     await waitUntil(async () => {
-      const agents = await client.listAgents();
-      const us = agents.find((a) => a.agentId === AGENT_ID);
+      const { connected } = await client.roster();
+      const us = connected.find((a) => a.agentId === AGENT_ID);
       return Boolean(us && us.connected > 0);
     }, 5_000);
   }, 20_000);
@@ -164,25 +184,18 @@ describe('end-to-end: operator → broker → link → channel event', () => {
     expect(params.meta.level).toBe('warning');
     expect(params.meta.run_id).toBe('e2e-1');
     expect(params.meta.kind).toBe('ci_alert');
+    expect(params.meta.thread).toBe('dm');
+    expect(params.meta.from).toBe('ACTUAL');
   });
 
   it('agent-as-operator: link send tool reaches the broker and back', async () => {
-    // Register the peer under its own token — the broker enforces
-    // agentId === principal.name, so alice cannot register on behalf
-    // of the peer.
-    const peerClient = new Client({
-      url: `http://${server.host}:${server.port}`,
-      token: PEER_TOKEN,
-    });
-    await peerClient.register(PEER_AGENT_ID);
-
     link.stdin.write(
       `${JSON.stringify({
         jsonrpc: '2.0',
         id: 42,
         method: 'tools/call',
         params: {
-          name: 'send_dm',
+          name: 'send',
           arguments: {
             to: PEER_AGENT_ID,
             body: 'agent-originated message',

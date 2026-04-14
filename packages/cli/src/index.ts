@@ -2,32 +2,38 @@
  * `c17` — operator CLI for control17.
  *
  * Subcommands:
- *   c17 push    — push an event to an agent or broadcast
- *   c17 agents  — list connected agents
+ *   c17 setup   — first-run wizard: create team config + enroll TOTP
+ *   c17 enroll  — (re-)enroll a slot for web UI login (TOTP)
+ *   c17 connect — interactive TUI for the team net
+ *   c17 push    — push an event to a teammate or broadcast
+ *   c17 roster  — list slots and connection state
  *   c17 serve   — run a local broker (optional peer: @control17/server)
  *   c17 link    — run the stdio MCP channel link (optional peer: @control17/link)
  *
  * Global env vars (defaults):
  *   C17_URL       = http://127.0.0.1:8717
- *   C17_TOKEN     (required for push/agents)
- *   C17_AGENT_ID  (required for link)
+ *   C17_TOKEN     (required for connect/push/roster/link)
  */
 
 import { Client } from '@control17/sdk/client';
 import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 import { parseDataFlag, parseSubcommandArgs } from './args.js';
-import { runAgentsCommand } from './commands/agents.js';
+import { runEnrollCommand } from './commands/enroll.js';
 import { runLinkCommand } from './commands/link.js';
 import { type PushCommandInput, runPushCommand, UsageError } from './commands/push.js';
+import { runRosterCommand } from './commands/roster.js';
 import { runServeCommand } from './commands/serve.js';
+import { runSetupCommand } from './commands/setup.js';
 import { CLI_VERSION } from './version.js';
 
 const USAGE = `control17 cli v${CLI_VERSION}
 
 usage:
-  c17 connect                   interactive TUI — join the squadron net
+  c17 setup   [--config-path <path>]            first-run wizard (team + slots + TOTP)
+  c17 enroll  --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
+  c17 connect                   interactive TUI — join the team net
   c17 push    --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
-  c17 agents
+  c17 roster                    list slots and their connection state
   c17 serve   [--config-path <path>] [--port <n>] [--host <h>] [--db <path>]
   c17 link    (configured via C17_URL / C17_TOKEN env vars)
 
@@ -81,14 +87,20 @@ async function main(): Promise<void> {
   const rest = argv.slice(1);
 
   switch (subcommand) {
+    case 'setup':
+      await handleSetup(rest);
+      return;
+    case 'enroll':
+      await handleEnroll(rest);
+      return;
     case 'connect':
       await handleConnect(rest);
       return;
     case 'push':
       await handlePush(rest);
       return;
-    case 'agents':
-      await handleAgents(rest);
+    case 'roster':
+      await handleRoster(rest);
       return;
     case 'serve':
       await handleServe(rest);
@@ -99,6 +111,60 @@ async function main(): Promise<void> {
     default:
       process.stderr.write(USAGE);
       fail(`unknown subcommand: ${subcommand}`);
+  }
+}
+
+async function handleSetup(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    'config-path': { type: 'string' },
+    config: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+
+  try {
+    await runSetupCommand(
+      {
+        configPath: getString(values, 'config-path') ?? getString(values, 'config'),
+      },
+      (line) => log(line),
+    );
+  } catch (err) {
+    if (err instanceof (await import('./commands/setup.js')).UsageError) {
+      fail(err.message, 2);
+    }
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleEnroll(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    slot: { type: 'string', short: 's' },
+    'config-path': { type: 'string' },
+    config: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+
+  try {
+    await runEnrollCommand(
+      {
+        slot: getString(values, 'slot'),
+        configPath: getString(values, 'config-path') ?? getString(values, 'config'),
+      },
+      (line) => log(line),
+    );
+  } catch (err) {
+    if (err instanceof (await import('./commands/enroll.js')).UsageError) {
+      fail(err.message, 2);
+    }
+    fail(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -173,7 +239,7 @@ async function handlePush(args: string[]): Promise<void> {
   }
 }
 
-async function handleAgents(args: string[]): Promise<void> {
+async function handleRoster(args: string[]): Promise<void> {
   const { values } = parseSubcommandArgs(args, {
     url: { type: 'string' },
     token: { type: 'string' },
@@ -185,7 +251,7 @@ async function handleAgents(args: string[]): Promise<void> {
   }
   try {
     const client = makeClient(values);
-    const output = await runAgentsCommand(client);
+    const output = await runRosterCommand(client);
     log(output);
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));

@@ -21,7 +21,7 @@
  */
 
 import type { Client } from '@control17/sdk/client';
-import type { Agent, Message, PrincipalKind } from '@control17/sdk/types';
+import type { Agent, BriefingResponse, Message } from '@control17/sdk/types';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { renderToLines } from './render-lines.js';
@@ -31,8 +31,7 @@ import { PRIMARY } from './theme.js';
 
 interface Props {
   client: Client;
-  principalName: string;
-  principalKind: PrincipalKind;
+  briefing: BriefingResponse;
 }
 
 type ThreadKey = string | null;
@@ -160,35 +159,46 @@ const INITIAL_STATE: State = {
 
 // ── Component ────────────────────────────────────────────────────────
 
-export function App({ client, principalName, principalKind }: Props) {
+export function App({ client, briefing }: Props) {
+  const selfCallsign = briefing.callsign;
+  const selfRole = briefing.role;
+  const teamName = briefing.team.name;
+  const teamMission = briefing.team.mission;
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const abortRef = useRef<AbortController | null>(null);
 
-  // ── Bootstrap: history + agents + SSE ──
+  // ── Bootstrap: history + roster + SSE ──
   useEffect(() => {
     const ac = new AbortController();
     abortRef.current = ac;
 
     async function bootstrap() {
+      // Step 1: initial history + roster. If either fails we surface
+      // the error and STOP — opening a subscription on top of a
+      // half-loaded state would paper over the problem.
       try {
-        const [history, agents] = await Promise.all([
+        const [history, roster] = await Promise.all([
           client.history({ limit: 100 }),
-          client.listAgents(),
+          client.roster(),
         ]);
-        dispatch({ type: 'ADD_MESSAGES', messages: history, viewer: principalName });
-        dispatch({ type: 'SET_AGENTS', agents });
+        if (ac.signal.aborted) return;
+        dispatch({ type: 'ADD_MESSAGES', messages: history, viewer: selfCallsign });
+        dispatch({ type: 'SET_AGENTS', agents: roster.connected });
       } catch (err) {
+        if (ac.signal.aborted) return;
         dispatch({
           type: 'SET_ERROR',
-          error: `bootstrap: ${err instanceof Error ? err.message : String(err)}`,
+          error: `bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
         });
+        return;
       }
 
+      // Step 2: live SSE subscription.
+      dispatch({ type: 'SET_CONNECTED', value: true });
       try {
-        dispatch({ type: 'SET_CONNECTED', value: true });
-        for await (const msg of client.subscribe(principalName, ac.signal)) {
-          dispatch({ type: 'RECEIVE_MESSAGE', message: msg, viewer: principalName });
+        for await (const msg of client.subscribe(selfCallsign, ac.signal)) {
+          dispatch({ type: 'RECEIVE_MESSAGE', message: msg, viewer: selfCallsign });
         }
       } catch (err) {
         if (ac.signal.aborted) return;
@@ -202,15 +212,23 @@ export function App({ client, principalName, principalKind }: Props) {
 
     void bootstrap();
     return () => ac.abort();
-  }, [client, principalName]);
+  }, [client, selfCallsign]);
 
-  // ── Periodic agent refresh ──
+  // ── Periodic roster refresh ──
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
-        dispatch({ type: 'SET_AGENTS', agents: await client.listAgents() });
-      } catch {
-        /* best-effort */
+        const roster = await client.roster();
+        dispatch({ type: 'SET_AGENTS', agents: roster.connected });
+      } catch (err) {
+        // Roster failures are usually transient (broker restart,
+        // flaky network). We don't flip `connected` here — the SSE
+        // subscription is the authoritative connection signal. But
+        // we surface the error so it's visible if it persists.
+        dispatch({
+          type: 'SET_ERROR',
+          error: `roster refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     }, 10_000);
     return () => clearInterval(timer);
@@ -226,7 +244,7 @@ export function App({ client, principalName, principalKind }: Props) {
     }
   }
   for (const agent of state.agents) {
-    if (agent.agentId !== principalName && !seen.has(agent.agentId)) {
+    if (agent.agentId !== selfCallsign && !seen.has(agent.agentId)) {
       seen.add(agent.agentId);
       threadKeys.push(agent.agentId);
     }
@@ -247,8 +265,8 @@ export function App({ client, principalName, principalKind }: Props) {
   const bodyWidth = Math.max(20, innerWidth - 2); // -2 for paddingX
 
   const renderedLines = useMemo(
-    () => renderToLines(currentMessages, principalName, bodyWidth),
-    [currentMessages, principalName, bodyWidth],
+    () => renderToLines(currentMessages, selfCallsign, bodyWidth),
+    [currentMessages, selfCallsign, bodyWidth],
   );
 
   const totalLines = renderedLines.length;
@@ -374,8 +392,11 @@ export function App({ client, principalName, principalKind }: Props) {
             C17
           </Text>
           <Text>{'  '}</Text>
-          <Text bold>{principalName.toUpperCase()}</Text>
-          <Text color="gray"> ({principalKind})</Text>
+          <Text bold>{selfCallsign.toUpperCase()}</Text>
+          <Text color="gray"> · </Text>
+          <Text color="gray">{selfRole}</Text>
+          <Text color="gray"> · </Text>
+          <Text color="gray">{teamName}</Text>
         </Box>
         <Box>
           {state.connected ? (
@@ -441,7 +462,7 @@ export function App({ client, principalName, principalKind }: Props) {
         )}
         {currentMessages.length === 0 && state.connected && (
           <Box flexGrow={1} alignItems="center" justifyContent="center">
-            <Text color="gray">net is quiet</Text>
+            <Text color="gray">net is quiet — {teamMission}</Text>
           </Box>
         )}
         {totalLines > 0 &&

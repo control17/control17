@@ -28,21 +28,21 @@ export interface FakeBroker {
   port: number;
   url: string;
   pushes: FakeBrokerPush[];
-  registrations: string[];
   subscribers: SseSubscriber[];
   waitForSubscriber: (agentId: string, timeoutMs?: number) => Promise<SseSubscriber>;
   close: () => Promise<void>;
 }
 
 const TOKEN = 'fake-broker-token';
-// Principal the fake broker claims to recognise. The link calls
-// /whoami at startup to self-derive its agentId; this is what it
-// gets back, and what it will then register + subscribe under.
-export const FAKE_BROKER_PRINCIPAL = 'link-test-agent';
+// Callsign the fake broker returns from /briefing. The link calls
+// /briefing at startup to self-derive its callsign; this is what it
+// gets back, and what it will then subscribe under.
+export const FAKE_BROKER_CALLSIGN = 'link-test-agent';
+export const FAKE_BROKER_TEAM_NAME = 'fake-squadron';
+export const FAKE_BROKER_MISSION = 'Exercise the link in isolation.';
 
 export async function startFakeBroker(): Promise<FakeBroker> {
   const pushes: FakeBrokerPush[] = [];
-  const registrations: string[] = [];
   const subscribers: SseSubscriber[] = [];
 
   const httpServer = createServer((req, res) => {
@@ -69,37 +69,46 @@ export async function startFakeBroker(): Promise<FakeBroker> {
       return;
     }
 
-    if (url.pathname === '/whoami' && req.method === 'GET') {
-      res.writeHead(200, jsonHeaders);
-      res.end(JSON.stringify({ name: FAKE_BROKER_PRINCIPAL, kind: 'agent' }));
-      return;
-    }
-
-    if (url.pathname === '/register' && req.method === 'POST') {
-      const body = await readBody(req);
-      const parsed = JSON.parse(body) as { agentId: string };
-      registrations.push(parsed.agentId);
+    if (url.pathname === '/briefing' && req.method === 'GET') {
       res.writeHead(200, jsonHeaders);
       res.end(
         JSON.stringify({
-          agentId: parsed.agentId,
-          registeredAt: Date.now(),
+          callsign: FAKE_BROKER_CALLSIGN,
+          role: 'implementer',
+          team: {
+            name: FAKE_BROKER_TEAM_NAME,
+            mission: FAKE_BROKER_MISSION,
+            brief: '',
+          },
+          teammates: [
+            { callsign: FAKE_BROKER_CALLSIGN, role: 'implementer' },
+            { callsign: 'peer-1', role: 'reviewer' },
+          ],
+          instructions:
+            `You've connected to the control17 net. On this team you go by ${FAKE_BROKER_CALLSIGN}.\n` +
+            `Team: ${FAKE_BROKER_TEAM_NAME}\n` +
+            `Mission: ${FAKE_BROKER_MISSION}`,
+          canEdit: false,
         }),
       );
       return;
     }
 
-    if (url.pathname === '/agents' && req.method === 'GET') {
+    if (url.pathname === '/roster' && req.method === 'GET') {
       res.writeHead(200, jsonHeaders);
       res.end(
         JSON.stringify({
-          agents: [
+          teammates: [
+            { callsign: FAKE_BROKER_CALLSIGN, role: 'implementer' },
+            { callsign: 'peer-1', role: 'reviewer' },
+          ],
+          connected: [
             {
               agentId: 'peer-1',
               connected: 1,
               createdAt: 1_700_000_000_000,
               lastSeen: 1_700_000_000_000,
-              kind: 'agent',
+              role: 'reviewer',
             },
           ],
         }),
@@ -119,7 +128,7 @@ export async function startFakeBroker(): Promise<FakeBroker> {
             id: `fake-${pushes.length}`,
             ts: Date.now(),
             agentId: parsed.agentId ?? null,
-            from: FAKE_BROKER_PRINCIPAL,
+            from: FAKE_BROKER_CALLSIGN,
             title: parsed.title ?? null,
             body: parsed.body,
             level: parsed.level ?? 'info',
@@ -127,6 +136,12 @@ export async function startFakeBroker(): Promise<FakeBroker> {
           },
         }),
       );
+      return;
+    }
+
+    if (url.pathname === '/history' && req.method === 'GET') {
+      res.writeHead(200, jsonHeaders);
+      res.end(JSON.stringify({ messages: [] }));
       return;
     }
 
@@ -167,7 +182,6 @@ export async function startFakeBroker(): Promise<FakeBroker> {
     port: address.port,
     url: `http://127.0.0.1:${address.port}`,
     pushes,
-    registrations,
     subscribers,
     waitForSubscriber: async (agentId, timeoutMs = 3000) => {
       const deadline = Date.now() + timeoutMs;

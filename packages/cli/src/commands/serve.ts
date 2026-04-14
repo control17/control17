@@ -7,7 +7,7 @@
  * `c17 serve`, we dynamically import the server at runtime. If it
  * isn't installed, we exit with a friendly hint.
  *
- * Auth comes from a JSON principal config file. The CLI forwards the
+ * Auth comes from a JSON team config file. The CLI forwards the
  * resolved path to the server module; on a missing file we drop into
  * the same first-run wizard `c17-server` uses, so the two entry points
  * stay consistent.
@@ -16,7 +16,7 @@
 import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 
 // Type-only import: compiles away, never loaded at runtime.
-import type { PrincipalStore, RunningServer } from '@control17/server';
+import type { RunningServer, TeamConfig } from '@control17/server';
 
 export interface ServeCommandInput {
   configPath?: string;
@@ -46,19 +46,23 @@ export async function runServeCommand(
   const server = await loadServerModule();
   const configPath = input.configPath ?? process.env[ENV.configPath] ?? server.defaultConfigPath();
 
-  const principals = await loadOrCreatePrincipals(server, configPath, stdout);
+  const config = await loadOrCreateTeamConfig(server, configPath, stdout);
 
   const running = await server.runServer({
-    principals,
+    slots: config.store,
+    team: config.team,
+    roles: config.roles,
     port,
     host,
     dbPath,
     onListen: (info) => {
       stdout(
         `control17-server listening on http://${info.address}:${info.port}\n` +
-          `  config: ${configPath}\n` +
-          `  db:     ${dbPath}\n` +
-          `  tokens: ${principals.size()} (${principals.names().join(', ')})`,
+          `  team:    ${config.team.name}\n` +
+          `  mission: ${config.team.mission}\n` +
+          `  config:  ${configPath}\n` +
+          `  db:      ${dbPath}\n` +
+          `  slots:   ${config.store.size()} (${config.store.callsigns().join(', ')})`,
       );
     },
   });
@@ -66,22 +70,22 @@ export async function runServeCommand(
   return running;
 }
 
-async function loadOrCreatePrincipals(
+async function loadOrCreateTeamConfig(
   server: typeof import('@control17/server'),
   configPath: string,
   stdout: (line: string) => void,
-): Promise<PrincipalStore> {
+): Promise<TeamConfig> {
   try {
-    const { store, migrated } = server.loadPrincipalsFromFileVerbose(configPath);
-    if (migrated > 0) {
-      stdout(`c17 serve: hashed ${migrated} plaintext token(s) in ${configPath}`);
+    const config = server.loadTeamConfigFromFile(configPath);
+    if (config.migrated > 0) {
+      stdout(`c17 serve: hashed ${config.migrated} plaintext token(s) in ${configPath}`);
     }
-    return store;
+    return config;
   } catch (err) {
     if (err instanceof server.ConfigNotFoundError) {
       return runWizardOrFail(server, configPath);
     }
-    if (err instanceof server.PrincipalLoadError) {
+    if (err instanceof server.SlotLoadError) {
       throw new UsageError(`serve: ${err.message}`);
     }
     throw err;
@@ -91,7 +95,7 @@ async function loadOrCreatePrincipals(
 async function runWizardOrFail(
   server: typeof import('@control17/server'),
   configPath: string,
-): Promise<PrincipalStore> {
+): Promise<TeamConfig> {
   const { io, close } = server.createTtyWizardIO();
   if (!io.isInteractive) {
     close();
@@ -105,7 +109,7 @@ async function runWizardOrFail(
   try {
     return await server.runFirstRunWizard({ configPath, io });
   } catch (err) {
-    if (err instanceof server.PrincipalLoadError) {
+    if (err instanceof server.SlotLoadError) {
       throw new UsageError(`serve: ${err.message}`);
     }
     throw err;

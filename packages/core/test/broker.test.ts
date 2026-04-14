@@ -31,49 +31,64 @@ describe('Broker.register', () => {
     expect(broker.listAgents()).toHaveLength(1);
   });
 
-  it('records principal kind from the register context', async () => {
+  it('records role from the register context', async () => {
     const { broker } = makeBroker();
-    await broker.register('build-bot', { kind: 'agent' });
+    await broker.register('build-bot', { role: 'agent' });
     const agents = broker.listAgents();
     expect(agents).toHaveLength(1);
-    expect(agents[0]?.kind).toBe('agent');
+    expect(agents[0]?.role).toBe('agent');
   });
 
-  it('defaults kind to null when no context is supplied', async () => {
+  it('defaults role to null when no context is supplied', async () => {
     const { broker } = makeBroker();
     await broker.register('nameless');
-    expect(broker.listAgents()[0]?.kind).toBeNull();
+    expect(broker.listAgents()[0]?.role).toBeNull();
   });
 
-  it('allows the matching principal to register idempotently', async () => {
+  it('allows the matching callsign to register idempotently', async () => {
     const { broker } = makeBroker();
-    await broker.register('alice', { kind: 'human', principal: 'alice' });
-    await broker.register('alice', { kind: 'human', principal: 'alice' });
+    await broker.register('alice', { role: 'operator', callsign: 'alice' });
+    await broker.register('alice', { role: 'operator', callsign: 'alice' });
     expect(broker.listAgents()).toHaveLength(1);
   });
 
-  it('rejects register when agentId does not equal principal', async () => {
+  it('rejects register when agentId does not equal callsign', async () => {
     const { broker } = makeBroker();
     await expect(
-      broker.register('alice', { kind: 'human', principal: 'mallory' }),
+      broker.register('alice', { role: 'operator', callsign: 'mallory' }),
     ).rejects.toBeInstanceOf(AgentIdentityError);
   });
 
-  it('skips the identity check when no principal is supplied', async () => {
+  it('skips the identity check when no callsign is supplied', async () => {
     const { broker } = makeBroker();
     await expect(broker.register('whoever')).resolves.toBeDefined();
   });
 });
 
-describe('Broker.subscribe identity', () => {
-  it('rejects subscribe when agentId does not equal principal', async () => {
+describe('Broker.seedSlots', () => {
+  it('pre-populates the registry with every slot', () => {
     const { broker } = makeBroker();
-    expect(() => broker.subscribe('alice', () => {}, { principal: 'mallory' })).toThrow(
+    broker.seedSlots([
+      { callsign: 'ACTUAL', role: 'operator' },
+      { callsign: 'ALPHA-1', role: 'implementer' },
+      { callsign: 'SIERRA', role: 'reviewer' },
+    ]);
+    const agents = broker.listAgents();
+    expect(agents.map((a) => a.agentId).sort()).toEqual(['ACTUAL', 'ALPHA-1', 'SIERRA']);
+    expect(agents.find((a) => a.agentId === 'ACTUAL')?.role).toBe('operator');
+    expect(agents.every((a) => a.connected === 0)).toBe(true);
+  });
+});
+
+describe('Broker.subscribe identity', () => {
+  it('rejects subscribe when agentId does not equal callsign', async () => {
+    const { broker } = makeBroker();
+    expect(() => broker.subscribe('alice', () => {}, { callsign: 'mallory' })).toThrow(
       AgentIdentityError,
     );
   });
 
-  it('allows the matching principal to subscribe', async () => {
+  it('allows the matching callsign to subscribe', async () => {
     const { broker } = makeBroker();
     const received: Message[] = [];
     broker.subscribe(
@@ -81,7 +96,7 @@ describe('Broker.subscribe identity', () => {
       (m) => {
         received.push(m);
       },
-      { principal: 'alice' },
+      { callsign: 'alice' },
     );
     await broker.push({ agentId: 'alice', body: 'hi' }, { from: 'bob' });
     expect(received).toHaveLength(1);
@@ -91,8 +106,8 @@ describe('Broker.subscribe identity', () => {
 describe('Broker.push DM sender-fanout', () => {
   it("delivers a DM to the sender's own agent when both are registered", async () => {
     const { broker } = makeBroker();
-    await broker.register('alice', { kind: 'human', principal: 'alice' });
-    await broker.register('build-bot', { kind: 'agent', principal: 'build-bot' });
+    await broker.register('alice', { role: 'operator', callsign: 'alice' });
+    await broker.register('build-bot', { role: 'agent', callsign: 'build-bot' });
 
     const aliceReceived: Message[] = [];
     const botReceived: Message[] = [];
@@ -101,14 +116,14 @@ describe('Broker.push DM sender-fanout', () => {
       (m) => {
         aliceReceived.push(m);
       },
-      { principal: 'alice' },
+      { callsign: 'alice' },
     );
     broker.subscribe(
       'build-bot',
       (m) => {
         botReceived.push(m);
       },
-      { principal: 'build-bot' },
+      { callsign: 'build-bot' },
     );
 
     const result = await broker.push({ agentId: 'build-bot', body: 'status?' }, { from: 'alice' });
@@ -125,14 +140,14 @@ describe('Broker.push DM sender-fanout', () => {
 
   it('does not double-deliver when the sender talks to themselves', async () => {
     const { broker } = makeBroker();
-    await broker.register('alice', { kind: 'human', principal: 'alice' });
+    await broker.register('alice', { role: 'operator', callsign: 'alice' });
     const received: Message[] = [];
     broker.subscribe(
       'alice',
       (m) => {
         received.push(m);
       },
-      { principal: 'alice' },
+      { callsign: 'alice' },
     );
 
     const result = await broker.push({ agentId: 'alice', body: 'note-to-self' }, { from: 'alice' });
@@ -144,14 +159,14 @@ describe('Broker.push DM sender-fanout', () => {
 
   it('is a no-op when the sender has no registered agent', async () => {
     const { broker } = makeBroker();
-    await broker.register('build-bot', { kind: 'agent', principal: 'build-bot' });
+    await broker.register('build-bot', { role: 'agent', callsign: 'build-bot' });
     const received: Message[] = [];
     broker.subscribe(
       'build-bot',
       (m) => {
         received.push(m);
       },
-      { principal: 'build-bot' },
+      { callsign: 'build-bot' },
     );
 
     const result = await broker.push({ agentId: 'build-bot', body: 'hello' }, { from: 'alice' });

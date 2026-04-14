@@ -28,15 +28,15 @@ describe('Client', () => {
       token: 'test-secret',
       fetch: makeFakeFetch((url, init) => {
         captured = { url, headers: new Headers(init.headers) };
-        return jsonResponse({ agents: [] });
+        return jsonResponse({ teammates: [], connected: [] });
       }),
     });
 
-    await client.listAgents();
+    await client.roster();
 
     expect(captured).not.toBeNull();
     const { url, headers } = captured as unknown as { url: URL; headers: Headers };
-    expect(url.pathname).toBe('/agents');
+    expect(url.pathname).toBe('/roster');
     expect(headers.get(PROTOCOL_HEADER)).toBe(String(PROTOCOL_VERSION));
     expect(headers.get('Authorization')).toBe('Bearer test-secret');
   });
@@ -93,9 +93,9 @@ describe('Client', () => {
           }),
       ),
     });
-    await expect(client.listAgents()).rejects.toBeInstanceOf(ClientError);
+    await expect(client.roster()).rejects.toBeInstanceOf(ClientError);
     try {
-      await client.listAgents();
+      await client.roster();
     } catch (err) {
       expect(err).toBeInstanceOf(ClientError);
       const e = err as ClientError;

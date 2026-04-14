@@ -1,8 +1,8 @@
 import { Client } from '@control17/sdk/client';
-import type { Agent, Message, PushResult } from '@control17/sdk/types';
+import type { Agent, Message, PushResult, Teammate } from '@control17/sdk/types';
 import { describe, expect, it } from 'vitest';
-import { runAgentsCommand } from '../src/commands/agents.js';
 import { buildPushPayload, runPushCommand, UsageError } from '../src/commands/push.js';
+import { runRosterCommand } from '../src/commands/roster.js';
 
 function mockFetch(handler: (url: URL, init: RequestInit) => Response): typeof fetch {
   return ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -97,35 +97,41 @@ describe('runPushCommand', () => {
   });
 });
 
-describe('runAgentsCommand', () => {
-  it('renders a formatted table when agents exist', async () => {
-    const agents: Agent[] = [
+describe('runRosterCommand', () => {
+  it('renders a formatted table when teammates exist', async () => {
+    const teammates: Teammate[] = [
+      { callsign: 'ACTUAL', role: 'operator' },
+      { callsign: 'ALPHA-1', role: 'implementer' },
+    ];
+    const connected: Agent[] = [
       {
-        agentId: 'alpha',
+        agentId: 'ACTUAL',
         connected: 1,
         createdAt: 1_700_000_000_000,
         lastSeen: 1_700_000_100_000,
-        kind: 'agent',
+        role: 'operator',
       },
     ];
     const client = new Client({
       url: 'http://broker.test',
       token: 'secret',
-      fetch: mockFetch(() => jsonResponse({ agents })),
+      fetch: mockFetch(() => jsonResponse({ teammates, connected })),
     });
-    const out = await runAgentsCommand(client);
-    expect(out).toContain('agent_id');
-    expect(out).toContain('alpha');
-    expect(out).toContain('1');
+    const out = await runRosterCommand(client);
+    expect(out).toContain('callsign');
+    expect(out).toContain('ACTUAL');
+    expect(out).toContain('ALPHA-1');
+    expect(out).toContain('operator');
+    expect(out).toContain('implementer');
   });
 
   it('renders a friendly message when empty', async () => {
     const client = new Client({
       url: 'http://broker.test',
       token: 'secret',
-      fetch: mockFetch(() => jsonResponse({ agents: [] })),
+      fetch: mockFetch(() => jsonResponse({ teammates: [], connected: [] })),
     });
-    const out = await runAgentsCommand(client);
-    expect(out).toBe('no agents registered');
+    const out = await runRosterCommand(client);
+    expect(out).toBe('no slots defined');
   });
 });

@@ -8,12 +8,49 @@
 export type LogLevel = 'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical';
 
 /**
- * Cosmetic classification of a principal (named-token holder). Never
- * gates wire-level behavior — the broker treats every kind identically.
- * Freeform string so operators can label participants however they want.
- * Suggested defaults: `operator`, `agent`, `service`.
+ * A team is the top-level unit the server controls. One server = one
+ * team (multi-team lives at the SaaS layer). The team defines the
+ * mission and the context every slot inherits.
  */
-export type PrincipalKind = string;
+export interface Team {
+  name: string;
+  mission: string;
+  brief: string;
+}
+
+/**
+ * A named bundle of role-specific instructions. Roles are defined in
+ * the server config and referenced by slots. Multiple slots can share
+ * a role — e.g., two `implementer` slots running in parallel.
+ *
+ * `editor: true` grants the slot permission to edit the team/roles
+ * via (future) runtime admin endpoints. Today the flag is plumbed
+ * through `/briefing.canEdit` but no edit endpoints exist yet.
+ */
+export interface Role {
+  description: string;
+  instructions: string;
+  editor?: boolean;
+}
+
+/**
+ * A reserved position on the team. The token is the auth boundary;
+ * the callsign is the team-context identity; the role string is a
+ * key into the team's roles map.
+ *
+ * On the wire, slots never carry their token — it's resolved by auth
+ * and never returned in any response.
+ */
+export interface Slot {
+  callsign: string;
+  role: string;
+}
+
+/** Projection of a slot for rendering in the roster / briefing. */
+export interface Teammate {
+  callsign: string;
+  role: string;
+}
 
 export interface Agent {
   agentId: string;
@@ -22,21 +59,12 @@ export interface Agent {
   createdAt: number;
   lastSeen: number;
   /**
-   * The kind of the principal that registered this agent.
-   * Cosmetic only — never affects auth or delivery.
-   *
-   * Identity note: the `agentId` itself IS the owning principal's
-   * name. Each principal has exactly one canonical agent id equal to
-   * its name, and the broker enforces that rule on register and
-   * subscribe. There is no separate `owner` field because it would
-   * always be redundant with `agentId`.
+   * Role the occupying slot plays on the team. Cosmetic at the broker
+   * level — never gates auth or delivery, purely for display and
+   * dashboards. null for seeded-but-never-connected agents in some
+   * test paths.
    */
-  kind: PrincipalKind | null;
-}
-
-export interface AgentRegistration {
-  agentId: string;
-  registeredAt: number;
+  role: string | null;
 }
 
 export interface PushPayload {
@@ -50,12 +78,11 @@ export interface PushPayload {
 export interface Message {
   id: string;
   ts: number;
-  /** Target agent id, or null for a broadcast. */
+  /** Target agent callsign, or null for a broadcast. */
   agentId: string | null;
   /**
-   * Authoritative sender name, stamped by the broker based on the
-   * caller's authenticated principal. Never trusted from the request
-   * payload.
+   * Authoritative sender callsign, stamped by the broker based on the
+   * caller's authenticated slot. Never trusted from the request payload.
    */
   from: string | null;
   title: string | null;
@@ -76,28 +103,41 @@ export interface PushResult {
   message: Message;
 }
 
-export interface AgentList {
-  agents: Agent[];
-}
-
 export interface HealthResponse {
   status: 'ok';
   version: string;
 }
 
 /**
- * Identity of the principal that authenticated the current request.
- * Returned from `/whoami`, used by clients (link, tui) to self-derive
- * their canonical `agentId` from the server's view of their token.
+ * Full team-context packet returned from `GET /briefing`. Used by the
+ * link and the TUI to initialize themselves with team/role/mission
+ * context. The `instructions` string is pre-composed server-side and
+ * passed verbatim into the MCP `Server({instructions})` init.
+ *
+ * This is the "on the net, you go by X and your role is Y" payload —
+ * it complements the agent's base identity with team context, it
+ * doesn't overwrite it.
  */
-export interface WhoamiResponse {
-  name: string;
-  kind: PrincipalKind;
+export interface BriefingResponse {
+  callsign: string;
+  role: string;
+  team: Team;
+  teammates: Teammate[];
+  instructions: string;
+  canEdit: boolean;
+}
+
+/** Response from `GET /roster`. */
+export interface RosterResponse {
+  /** Every slot defined in the team config. */
+  teammates: Teammate[];
+  /** Runtime connection state for slots currently registered with the broker. */
+  connected: Agent[];
 }
 
 /** Query parameters for `GET /history`. */
 export interface HistoryQuery {
-  /** DM counterpart principal — omit for full feed (broadcasts + DMs). */
+  /** DM counterpart callsign — omit for full feed (broadcasts + DMs). */
   with?: string;
   /** Max results (default 100, max 1000). */
   limit?: number;
@@ -107,4 +147,57 @@ export interface HistoryQuery {
 
 export interface HistoryResponse {
   messages: Message[];
+}
+
+/**
+ * Request body for `POST /session/totp`. The SPA submits the slot's
+ * callsign and a current 6-digit TOTP code; the server verifies and
+ * issues a session cookie on success.
+ */
+export interface TotpLoginRequest {
+  slot: string;
+  code: string;
+}
+
+/**
+ * Response body for `POST /session/totp` (on success) and `GET /session`.
+ * Carries the authenticated slot's callsign and the session expiry
+ * timestamp (ms since epoch) so the SPA can show "stay signed in for
+ * N days" UI hints and redirect on expiry.
+ */
+export interface SessionResponse {
+  slot: string;
+  role: string;
+  expiresAt: number;
+}
+
+/**
+ * VAPID public key advertisement — returned from
+ * `GET /push/vapid-public-key`. The SPA passes this into
+ * `pushManager.subscribe({applicationServerKey})` so the browser
+ * signs its subscription to our key rather than hardcoding one at
+ * build time.
+ */
+export interface VapidPublicKeyResponse {
+  publicKey: string;
+}
+
+/**
+ * Push subscription payload the SPA POSTs after the browser hands
+ * over a subscription. Matches the shape of a JSON-serialized
+ * `PushSubscription`.
+ */
+export interface PushSubscriptionPayload {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+}
+
+/** Response for a successful push-subscription registration. */
+export interface PushSubscriptionResponse {
+  id: number;
+  endpoint: string;
+  createdAt: number;
 }

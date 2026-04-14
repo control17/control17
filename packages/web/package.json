@@ -1,0 +1,55 @@
+{
+  "name": "@control17/web",
+  "version": "0.2.0",
+  "description": "Browser-based web UI for control17 — team chat, roster, and notifications served by the self-hosted broker.",
+  "license": "Apache-2.0",
+  "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
+  "homepage": "https://github.com/control17/control17#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/control17/control17.git",
+    "directory": "packages/web"
+  },
+  "bugs": {
+    "url": "https://github.com/control17/control17/issues"
+  },
+  "keywords": [
+    "control17",
+    "c17",
+    "web",
+    "spa",
+    "pwa",
+    "preact"
+  ],
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "clean": "rm -rf dist .turbo ../../apps/server/public"
+  },
+  "dependencies": {
+    "@control17/sdk": "workspace:*",
+    "@preact/signals": "^2.9.0",
+    "preact": "^10.29.1",
+    "preact-iso": "^2.11.1",
+    "workbox-precaching": "^7.3.0",
+    "workbox-window": "^7.3.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.0",
+    "@testing-library/preact": "^3.2.4",
+    "@types/node": "^22.0.0",
+    "@unocss/preset-wind4": "^66.6.8",
+    "@unocss/reset": "^66.6.8",
+    "happy-dom": "^18.0.1",
+    "typescript": "^5.6.0",
+    "unocss": "^66.6.8",
+    "vite": "^6.3.5",
+    "vite-plugin-pwa": "^1.2.0",
+    "vitest": "^4.0.0"
+  }
+}

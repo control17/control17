@@ -8,31 +8,48 @@
 
 import { AUTH_HEADER, PATHS, PROTOCOL_HEADER, PROTOCOL_VERSION } from './protocol.js';
 import {
-  AgentListSchema,
-  AgentRegistrationSchema,
+  BriefingResponseSchema,
   HealthResponseSchema,
   HistoryResponseSchema,
   MessageSchema,
   PushPayloadSchema,
   PushResultSchema,
-  WhoamiResponseSchema,
+  PushSubscriptionResponseSchema,
+  RosterResponseSchema,
+  SessionResponseSchema,
+  VapidPublicKeyResponseSchema,
 } from './schemas.js';
 import type {
-  Agent,
-  AgentRegistration,
+  BriefingResponse,
   HealthResponse,
   HistoryQuery,
   Message,
   PushPayload,
   PushResult,
-  WhoamiResponse,
+  PushSubscriptionPayload,
+  PushSubscriptionResponse,
+  RosterResponse,
+  SessionResponse,
+  TotpLoginRequest,
+  VapidPublicKeyResponse,
 } from './types.js';
 
 export interface ClientOptions {
   /** Broker base URL, e.g. `http://127.0.0.1:8717`. No trailing slash required. */
   url: string;
-  /** Shared-secret bearer token. Required for all endpoints except `/healthz`. */
-  token: string;
+  /**
+   * Shared-secret bearer token. Optional — omit for human/web-UI usage
+   * where auth comes from the session cookie (`useCookies: true`).
+   * Required for machine/MCP-link usage where no cookie is available.
+   */
+  token?: string;
+  /**
+   * Opt into `credentials: 'include'` on every request — for
+   * browser-side SPAs that rely on the `c17_session` cookie instead
+   * of a bearer token. Has no effect in Node where fetch doesn't
+   * manage cookies automatically.
+   */
+  useCookies?: boolean;
   /** Custom fetch implementation (for tests or polyfills). Defaults to `globalThis.fetch`. */
   fetch?: typeof fetch;
 }
@@ -51,13 +68,20 @@ export class ClientError extends Error {
 
 export class Client {
   private readonly baseUrl: URL;
-  private readonly token: string;
+  private readonly token: string | null;
+  private readonly useCookies: boolean;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: ClientOptions) {
     // Normalize: strip trailing slash so URL composition is predictable.
     this.baseUrl = new URL(`${options.url.replace(/\/+$/, '')}/`);
-    this.token = options.token;
+    this.token = options.token ?? null;
+    this.useCookies = options.useCookies ?? false;
+    if (!this.token && !this.useCookies) {
+      throw new Error(
+        'Client: must provide either `token` (bearer) or `useCookies: true` (session)',
+      );
+    }
     const fetchRef = options.fetch ?? globalThis.fetch;
     if (!fetchRef) {
       throw new Error('Client: no fetch implementation available');
@@ -66,7 +90,7 @@ export class Client {
     this.fetchImpl = fetchRef.bind(globalThis);
   }
 
-  /** Make a request with the protocol header and bearer token. */
+  /** Make a request with the protocol header and credentials. */
   private async request(
     path: string,
     init: RequestInit & { skipAuth?: boolean } = {},
@@ -74,11 +98,15 @@ export class Client {
     const url = new URL(path.replace(/^\//, ''), this.baseUrl);
     const headers = new Headers(init.headers);
     headers.set(PROTOCOL_HEADER, String(PROTOCOL_VERSION));
-    if (!init.skipAuth) {
+    if (!init.skipAuth && this.token) {
       headers.set(AUTH_HEADER, `Bearer ${this.token}`);
     }
     const { skipAuth: _skipAuth, ...rest } = init;
-    return this.fetchImpl(url, { ...rest, headers });
+    const requestInit: RequestInit = { ...rest, headers };
+    if (this.useCookies) {
+      requestInit.credentials = 'include';
+    }
+    return this.fetchImpl(url, requestInit);
   }
 
   private async json<T>(resp: Response): Promise<T> {
@@ -99,13 +127,121 @@ export class Client {
   }
 
   /**
-   * Ask the broker which principal the current bearer token maps to.
-   * Used by the link / TUI to self-derive their canonical agentId at
-   * startup without requiring a separate `C17_AGENT_ID` env var.
+   * Exchange a TOTP code for a session. Succeeds → server sets the
+   * `c17_session` cookie and returns the authenticated slot info.
+   * Failure modes: wrong/stale code → 401, malformed → 400,
+   * too-many-attempts → 429.
    */
-  async whoami(): Promise<WhoamiResponse> {
-    const resp = await this.request(PATHS.whoami, { method: 'GET' });
-    return WhoamiResponseSchema.parse(await this.json(resp));
+  async loginWithTotp(payload: TotpLoginRequest): Promise<SessionResponse> {
+    const resp = await this.request(PATHS.sessionTotp, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      skipAuth: true,
+    });
+    return SessionResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Drop the server-side session and clear the cookie. Safe to call
+   * even if already logged out — returns 200 either way.
+   */
+  async logout(): Promise<void> {
+    const resp = await this.request(PATHS.sessionLogout, {
+      method: 'POST',
+      skipAuth: true,
+    });
+    // Any 2xx is success; no body to validate.
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new ClientError(`logout failed: ${resp.status} ${resp.statusText}`, resp.status, body);
+    }
+  }
+
+  /**
+   * Fetch the current session's slot/role/expiry. Used by the SPA on
+   * mount to rehydrate its session signal before showing any UI.
+   * Returns null on 401 (no / expired session) so callers can treat
+   * "not signed in" as a first-class state without catching errors.
+   */
+  async currentSession(): Promise<SessionResponse | null> {
+    const resp = await this.request(PATHS.session, {
+      method: 'GET',
+      skipAuth: true,
+    });
+    if (resp.status === 401) return null;
+    return SessionResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Fetch the server's VAPID public key. Anonymous — no auth needed.
+   * Used by the SPA's push-subscription flow to pass into
+   * `pushManager.subscribe({applicationServerKey})`.
+   */
+  async vapidPublicKey(): Promise<VapidPublicKeyResponse> {
+    const resp = await this.request(PATHS.pushVapidPublicKey, {
+      method: 'GET',
+      skipAuth: true,
+    });
+    return VapidPublicKeyResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Register (or refresh) a push subscription for the current
+   * authenticated slot. Subsequent calls with the same endpoint
+   * replace the existing row.
+   */
+  async registerPushSubscription(
+    payload: PushSubscriptionPayload,
+  ): Promise<PushSubscriptionResponse> {
+    const resp = await this.request(PATHS.pushSubscriptions, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return PushSubscriptionResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Remove a push subscription by its database id. Scoped to the
+   * authenticated slot server-side.
+   */
+  async deletePushSubscription(id: number): Promise<void> {
+    const resp = await this.request(`${PATHS.pushSubscriptions}/${id}`, {
+      method: 'DELETE',
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new ClientError(
+        `deletePushSubscription failed: ${resp.status} ${resp.statusText}`,
+        resp.status,
+        body,
+      );
+    }
+  }
+
+  /**
+   * Fetch the team-context briefing for the authenticated slot.
+   *
+   * Returns the caller's callsign, role, team (name/mission/brief),
+   * list of teammates, and a pre-composed `instructions` string ready
+   * for `new Server({instructions})` in the MCP link. The TUI uses it
+   * to show "who you are on this team" in the header.
+   */
+  async briefing(): Promise<BriefingResponse> {
+    const resp = await this.request(PATHS.briefing, { method: 'GET' });
+    return BriefingResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * List all slots defined on the team (including any not currently
+   * connected) plus the runtime connection state of each registered
+   * agent. Use this for the team roster view in the TUI and for the
+   * `roster` MCP tool on the link side.
+   */
+  async roster(): Promise<RosterResponse> {
+    const resp = await this.request(PATHS.roster, { method: 'GET' });
+    return RosterResponseSchema.parse(await this.json(resp));
   }
 
   async history(query: HistoryQuery = {}): Promise<Message[]> {
@@ -118,21 +254,6 @@ export class Client {
     const resp = await this.request(path, { method: 'GET' });
     const parsed = HistoryResponseSchema.parse(await this.json(resp));
     return parsed.messages;
-  }
-
-  async register(agentId: string): Promise<AgentRegistration> {
-    const resp = await this.request(PATHS.register, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId }),
-    });
-    return AgentRegistrationSchema.parse(await this.json(resp));
-  }
-
-  async listAgents(): Promise<Agent[]> {
-    const resp = await this.request(PATHS.agents, { method: 'GET' });
-    const parsed = AgentListSchema.parse(await this.json(resp));
-    return parsed.agents;
   }
 
   async push(payload: PushPayload): Promise<PushResult> {

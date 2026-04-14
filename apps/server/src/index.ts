@@ -2,24 +2,27 @@
  * `@control17/server` — CLI entry for the self-hosted broker.
  *
  * Thin wrapper around `runServer()` that reads config from env/argv,
- * loads the principal config file (or drops into the first-run wizard
- * if the file is missing and stdin is a TTY), wires shutdown handlers,
- * and prints a startup banner. Import `runServer` directly if you want
- * to embed the broker in another Node process.
+ * loads the team config file (or drops into the first-run wizard if
+ * the file is missing and stdin is a TTY), wires shutdown handlers,
+ * and prints a startup banner. Import `runServer` directly if you
+ * want to embed the broker in another Node process.
  */
 
+import { networkInterfaces } from 'node:os';
+import { dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 import { logger } from './logger.js';
+import { type ListenInfo, runServer } from './run.js';
 import {
   ConfigNotFoundError,
   defaultConfigPath,
   exampleConfig,
-  loadPrincipalsFromFileVerbose,
-  PrincipalLoadError,
-  type PrincipalStore,
-} from './principals.js';
-import { runServer } from './run.js';
+  type HttpsConfig,
+  loadTeamConfigFromFile,
+  SlotLoadError,
+  type TeamConfig,
+} from './slots.js';
 import { createTtyWizardIO, runFirstRunWizard } from './wizard.js';
 
 const USAGE = `control17-server
@@ -28,7 +31,7 @@ usage:
   control17-server [--config-path <path>]
 
 options:
-  --config-path <path>   path to the principal config file
+  --config-path <path>   path to the team config file
                          (default: ./control17.json, or $C17_CONFIG_PATH)
   -h, --help             print this message and exit
 
@@ -42,6 +45,12 @@ env:
 function readEnv(name: string): string | undefined {
   const value = process.env[name];
   return value && value.length > 0 ? value : undefined;
+}
+
+/** Wrap IPv6 addresses in brackets for URL display. */
+function formatHost(address: string): string {
+  // IPv4 and hostnames pass through; IPv6 addresses contain ':'.
+  return address.includes(':') ? `[${address}]` : address;
 }
 
 function parseServerArgs(argv: string[]): { configPath?: string; help: boolean } {
@@ -64,20 +73,20 @@ function parseServerArgs(argv: string[]): { configPath?: string; help: boolean }
   }
 }
 
-async function loadOrCreatePrincipals(configPath: string): Promise<PrincipalStore> {
+async function loadOrCreateTeamConfig(configPath: string): Promise<TeamConfig> {
   try {
-    const { store, migrated } = loadPrincipalsFromFileVerbose(configPath);
-    if (migrated > 0) {
+    const config = loadTeamConfigFromFile(configPath);
+    if (config.migrated > 0) {
       process.stdout.write(
-        `control17-server: hashed ${migrated} plaintext token(s) in ${configPath}\n`,
+        `control17-server: hashed ${config.migrated} plaintext token(s) in ${configPath}\n`,
       );
     }
-    return store;
+    return config;
   } catch (err) {
     if (err instanceof ConfigNotFoundError) {
       return runWizardOrFail(configPath);
     }
-    if (err instanceof PrincipalLoadError) {
+    if (err instanceof SlotLoadError) {
       process.stderr.write(`control17-server: ${err.message}\n`);
       process.exit(1);
     }
@@ -85,7 +94,7 @@ async function loadOrCreatePrincipals(configPath: string): Promise<PrincipalStor
   }
 }
 
-async function runWizardOrFail(configPath: string): Promise<PrincipalStore> {
+async function runWizardOrFail(configPath: string): Promise<TeamConfig> {
   const { io, close } = createTtyWizardIO();
   if (!io.isInteractive) {
     close();
@@ -100,7 +109,7 @@ async function runWizardOrFail(configPath: string): Promise<PrincipalStore> {
   try {
     return await runFirstRunWizard({ configPath, io });
   } catch (err) {
-    if (err instanceof PrincipalLoadError) {
+    if (err instanceof SlotLoadError) {
       process.stderr.write(`control17-server: ${err.message}\n`);
       process.exit(1);
     }
@@ -108,6 +117,33 @@ async function runWizardOrFail(configPath: string): Promise<PrincipalStore> {
   } finally {
     close();
   }
+}
+
+/**
+ * Heuristic: if the bind host is neither a loopback nor a literal
+ * 0.0.0.0/::, we assume the operator is trying to expose the server
+ * on a LAN interface and we want HTTPS. Returns `null` for loopback
+ * binds where HTTP is safe, or a non-null string (the LAN IP to use
+ * as a SAN) when we should auto-flip to self-signed.
+ */
+function detectLanIpForSelfSign(host: string): string | null {
+  if (host === '127.0.0.1' || host === '::1' || host === 'localhost') return null;
+  if (host === '0.0.0.0' || host === '::') {
+    // Bind-everything — pick the first non-loopback IPv4 interface
+    // as the SAN. If we don't find one (containerized no-network
+    // setups) return empty string so the caller still flips mode
+    // but with no extra SAN.
+    for (const iface of Object.values(networkInterfaces())) {
+      for (const entry of iface ?? []) {
+        if (entry.family === 'IPv4' && !entry.internal) {
+          return entry.address;
+        }
+      }
+    }
+    return '';
+  }
+  // Explicit IP or hostname — treat as LAN, use it directly as SAN.
+  return host;
 }
 
 async function main(): Promise<void> {
@@ -127,20 +163,65 @@ async function main(): Promise<void> {
   const dbPath = readEnv(ENV.dbPath) ?? ':memory:';
   const configPath = args.configPath ?? defaultConfigPath();
 
-  const principals = await loadOrCreatePrincipals(configPath);
+  const {
+    store: slots,
+    team,
+    roles,
+    https: httpsFromConfig,
+  } = await loadOrCreateTeamConfig(configPath);
+
+  // Auto-flip: if the user didn't explicitly configure HTTPS in the
+  // config file AND is binding to a non-loopback interface, switch
+  // from off → self-signed with an auto-detected LAN SAN. They can
+  // still override by setting https.mode explicitly in the config.
+  let https: HttpsConfig = httpsFromConfig;
+  if (https.mode === 'off') {
+    const lanIp = detectLanIpForSelfSign(host);
+    if (lanIp !== null) {
+      https = {
+        ...https,
+        mode: 'self-signed',
+        selfSigned: { ...https.selfSigned, lanIp: lanIp || https.selfSigned.lanIp },
+      };
+      process.stdout.write(
+        `control17-server: host ${host} is non-loopback, auto-enabling self-signed HTTPS. ` +
+          `Set \`https.mode\` in ${configPath} to override.\n`,
+      );
+    }
+  }
 
   const running = await runServer({
-    principals,
+    slots,
+    team,
+    roles,
+    https,
+    configDir: dirname(configPath),
     port,
     host,
     dbPath,
-    onListen: (info) => {
-      process.stdout.write(
-        `control17-server listening on http://${info.address}:${info.port}\n` +
-          `  config: ${configPath}\n` +
-          `  db:     ${dbPath}\n` +
-          `  tokens: ${principals.size()} (${principals.names().join(', ')})\n`,
+    onListen: (info: ListenInfo) => {
+      const url = `${info.protocol}://${formatHost(info.address)}:${info.port}`;
+      const lines: string[] = [`control17-server listening on ${url}`];
+      if (info.protocol === 'https' && info.cert) {
+        lines.push(`  cert:    ${info.cert.source}`);
+        if (info.cert.certPath) {
+          lines.push(`  cert@:   ${info.cert.certPath}`);
+        }
+        if (info.cert.expiresAt) {
+          lines.push(`  expires: ${new Date(info.cert.expiresAt).toISOString()}`);
+        }
+        if (info.redirectHttpPort !== undefined) {
+          lines.push(`  redirect: http on :${info.redirectHttpPort} → 308 → ${url}`);
+        }
+      }
+      lines.push(
+        `  team:    ${team.name}`,
+        `  mission: ${team.mission}`,
+        `  config:  ${configPath}`,
+        `  db:      ${dbPath}`,
+        `  slots:   ${slots.size()} (${slots.callsigns().join(', ')})`,
       );
+      process.stdout.write(`${lines.join('\n')}\n`);
     },
   });
 

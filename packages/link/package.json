@@ -24,7 +24,17 @@
     "stdio"
   ],
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/run.js",
+  "types": "./dist/run.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/run.d.ts",
+      "import": "./dist/run.js"
+    },
+    "./bin": {
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "c17-link": "./dist/index.js"
   },
