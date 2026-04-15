@@ -38,8 +38,15 @@ const TOKEN = 'fake-broker-token';
 // /briefing at startup to self-derive its callsign; this is what it
 // gets back, and what it will then subscribe under.
 export const FAKE_BROKER_CALLSIGN = 'link-test-agent';
-export const FAKE_BROKER_TEAM_NAME = 'fake-squadron';
+export const FAKE_BROKER_SQUADRON_NAME = 'fake-squadron';
 export const FAKE_BROKER_MISSION = 'Exercise the link in isolation.';
+
+/**
+ * Objectives the fake broker will return from /briefing + /objectives.
+ * Tests can push onto or read from this to verify the link's sticky
+ * tool-description refresh path.
+ */
+export const fakeBrokerObjectives: Array<Record<string, unknown>> = [];
 
 export async function startFakeBroker(): Promise<FakeBroker> {
   const pushes: FakeBrokerPush[] = [];
@@ -75,20 +82,25 @@ export async function startFakeBroker(): Promise<FakeBroker> {
         JSON.stringify({
           callsign: FAKE_BROKER_CALLSIGN,
           role: 'implementer',
-          team: {
-            name: FAKE_BROKER_TEAM_NAME,
+          // Commander authority so the link test exercises the full
+          // authority-gated tool surface (objectives_create /
+          // _cancel / _reassign / _watchers). Operator-authority
+          // behavior is tested at the unit level via defineTools.
+          authority: 'commander',
+          squadron: {
+            name: FAKE_BROKER_SQUADRON_NAME,
             mission: FAKE_BROKER_MISSION,
             brief: '',
           },
           teammates: [
-            { callsign: FAKE_BROKER_CALLSIGN, role: 'implementer' },
-            { callsign: 'peer-1', role: 'reviewer' },
+            { callsign: FAKE_BROKER_CALLSIGN, role: 'implementer', authority: 'operator' },
+            { callsign: 'peer-1', role: 'reviewer', authority: 'operator' },
           ],
+          openObjectives: fakeBrokerObjectives,
           instructions:
-            `You've connected to the control17 net. On this team you go by ${FAKE_BROKER_CALLSIGN}.\n` +
-            `Team: ${FAKE_BROKER_TEAM_NAME}\n` +
+            `You've connected to the control17 net. In this squadron you go by ${FAKE_BROKER_CALLSIGN}.\n` +
+            `Squadron: ${FAKE_BROKER_SQUADRON_NAME}\n` +
             `Mission: ${FAKE_BROKER_MISSION}`,
-          canEdit: false,
         }),
       );
       return;
@@ -99,8 +111,8 @@ export async function startFakeBroker(): Promise<FakeBroker> {
       res.end(
         JSON.stringify({
           teammates: [
-            { callsign: FAKE_BROKER_CALLSIGN, role: 'implementer' },
-            { callsign: 'peer-1', role: 'reviewer' },
+            { callsign: FAKE_BROKER_CALLSIGN, role: 'implementer', authority: 'operator' },
+            { callsign: 'peer-1', role: 'reviewer', authority: 'operator' },
           ],
           connected: [
             {
@@ -109,10 +121,30 @@ export async function startFakeBroker(): Promise<FakeBroker> {
               createdAt: 1_700_000_000_000,
               lastSeen: 1_700_000_000_000,
               role: 'reviewer',
+              authority: 'operator',
             },
           ],
         }),
       );
+      return;
+    }
+
+    if (url.pathname === '/objectives' && req.method === 'GET') {
+      res.writeHead(200, jsonHeaders);
+      res.end(JSON.stringify({ objectives: fakeBrokerObjectives }));
+      return;
+    }
+
+    if (url.pathname.startsWith('/objectives/') && req.method === 'GET') {
+      const id = url.pathname.slice('/objectives/'.length);
+      const objective = fakeBrokerObjectives.find((o) => o.id === id);
+      if (!objective) {
+        res.writeHead(404, jsonHeaders);
+        res.end(JSON.stringify({ error: `no such objective: ${id}` }));
+        return;
+      }
+      res.writeHead(200, jsonHeaders);
+      res.end(JSON.stringify({ objective, events: [] }));
       return;
     }
 

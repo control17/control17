@@ -20,6 +20,7 @@ import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 import { parseDataFlag, parseSubcommandArgs } from './args.js';
 import { runEnrollCommand } from './commands/enroll.js';
 import { runLinkCommand } from './commands/link.js';
+import { runObjectivesCommand } from './commands/objectives.js';
 import { type PushCommandInput, runPushCommand, UsageError } from './commands/push.js';
 import { runRosterCommand } from './commands/roster.js';
 import { runServeCommand } from './commands/serve.js';
@@ -29,13 +30,14 @@ import { CLI_VERSION } from './version.js';
 const USAGE = `control17 cli v${CLI_VERSION}
 
 usage:
-  c17 setup   [--config-path <path>]            first-run wizard (team + slots + TOTP)
-  c17 enroll  --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
-  c17 connect                   interactive TUI — join the team net
-  c17 push    --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
-  c17 roster                    list slots and their connection state
-  c17 serve   [--config-path <path>] [--port <n>] [--host <h>] [--db <path>]
-  c17 link    (configured via C17_URL / C17_TOKEN env vars)
+  c17 setup       [--config-path <path>]            first-run wizard (squadron + slots + TOTP)
+  c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
+  c17 connect                       interactive TUI — join the squadron net
+  c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
+  c17 roster                        list slots, authority, and connection state
+  c17 objectives  list|view|create|update|complete|cancel|reassign   squadron objectives
+  c17 serve       [--config-path <path>] [--port <n>] [--host <h>] [--db <path>]
+  c17 link        (configured via C17_URL / C17_TOKEN env vars)
 
 global options (or via env):
   --url <url>       broker base URL (env: ${ENV.url}, default: http://127.0.0.1:${DEFAULT_PORT})
@@ -101,6 +103,9 @@ async function main(): Promise<void> {
       return;
     case 'roster':
       await handleRoster(rest);
+      return;
+    case 'objectives':
+      await handleObjectives(rest);
       return;
     case 'serve':
       await handleServe(rest);
@@ -306,6 +311,46 @@ async function handleServe(args: string[]): Promise<void> {
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+async function handleObjectives(args: string[]): Promise<void> {
+  // Objectives has its own internal subcommand routing that parses
+  // flags per-subcommand. We still pull `--url` / `--token` out of
+  // argv here so `c17 objectives list --url http://...` works the
+  // same way the other subcommands do.
+  //
+  // Strategy: extract --url and --token pairs from argv, passing the
+  // rest through to runObjectivesCommand. parseArgs would reject
+  // unknown options, so we do this by hand with a tight loop.
+  const clientOpts: Record<string, string> = {};
+  const passthrough: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--help' || arg === '-h') {
+      process.stdout.write(USAGE);
+      return;
+    }
+    if (arg === '--url' || arg === '--token') {
+      const next = args[i + 1];
+      if (next === undefined) {
+        fail(`${arg} requires a value`, 2);
+      }
+      clientOpts[arg.slice(2)] = next as string;
+      i++;
+      continue;
+    }
+    if (arg === undefined) continue;
+    passthrough.push(arg);
+  }
+
+  try {
+    const client = makeClient(clientOpts);
+    const output = await runObjectivesCommand(client, passthrough);
+    log(output);
+  } catch (err) {
+    if (err instanceof UsageError) fail(err.message, 2);
+    fail(err instanceof Error ? err.message : String(err));
+  }
 }
 
 async function handleLink(args: string[]): Promise<void> {

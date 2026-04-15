@@ -11,7 +11,7 @@
  * A mismatched identity surfaces as `AgentIdentityError`.
  */
 
-import type { Agent, Message } from '@control17/sdk/types';
+import type { Agent, Authority, Message } from '@control17/sdk/types';
 
 export type Subscriber = (message: Message) => void | Promise<void>;
 
@@ -44,12 +44,17 @@ export class AgentRegistry {
 
   /**
    * Look up or create an agent state entry. Updates `lastSeen` on each
-   * call so the list endpoint reflects recent activity. If `role` is
-   * provided on first registration, it becomes the agent's role
-   * classification; subsequent calls with a different `role` leave
-   * the existing one in place (first-register-wins).
+   * call so the list endpoint reflects recent activity. Role + authority
+   * are first-register-wins: once set, subsequent registrations ignore
+   * the values (registry is authoritative about slot identity, not
+   * about runtime role changes).
    */
-  registerOrGet(agentId: string, now: number, role: string | null = null): AgentState {
+  registerOrGet(
+    agentId: string,
+    now: number,
+    role: string | null = null,
+    authority: Authority = 'operator',
+  ): AgentState {
     const existing = this.agents.get(agentId);
     if (existing) {
       existing.agent.lastSeen = now;
@@ -62,6 +67,7 @@ export class AgentRegistry {
         createdAt: now,
         lastSeen: now,
         role,
+        authority,
       },
       subscribers: new Set(),
     };
@@ -86,6 +92,7 @@ export class AgentRegistry {
         createdAt: state.agent.createdAt,
         lastSeen: state.agent.lastSeen,
         role: state.agent.role,
+        authority: state.agent.authority,
       });
     }
     return out;

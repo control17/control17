@@ -38,7 +38,15 @@ export function Header() {
           aria-expanded={drawerOpen}
           class="md:hidden text-brand-muted hover:text-brand-text p-1 -ml-1 flex-shrink-0"
         >
-          <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            class="h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
             <path d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
@@ -52,11 +60,16 @@ export function Header() {
           <path d={LOGO_PATH} />
         </svg>
         <span class="text-brand-text font-semibold truncate">{s.slot}</span>
-        {/* Role + team name are secondary context — drop them below sm
-            where every pixel matters. They reappear at sm+ width. */}
-        <span class="hidden sm:inline text-brand-muted text-xs">{s.role}</span>
+        {/* Rank + squadron name are secondary context — drop them
+            below sm where every pixel matters. Rank (authority) is
+            shown rather than role because it's the load-bearing
+            identity axis for command authority. Role lives in the
+            Overview / Roster panel for anyone who needs it. */}
+        <span class="hidden sm:inline text-brand-muted text-xs">{s.authority}</span>
         {b && (
-          <span class="hidden sm:inline text-brand-muted text-xs truncate">· {b.team.name}</span>
+          <span class="hidden sm:inline text-brand-muted text-xs truncate">
+            · {b.squadron.name}
+          </span>
         )}
       </div>
       <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
@@ -68,7 +81,9 @@ export function Header() {
           title={connected ? 'on net' : 'off net'}
           class={connected ? 'text-brand-primary text-xs' : 'text-brand-muted text-xs'}
         >
-          <span class="sm:hidden" aria-hidden="true">{connected ? '◈' : '◇'}</span>
+          <span class="sm:hidden" aria-hidden="true">
+            {connected ? '◈' : '◇'}
+          </span>
           <span class="hidden sm:inline">{connected ? '◈ ON NET' : '◇ OFF NET'}</span>
         </span>
       </div>

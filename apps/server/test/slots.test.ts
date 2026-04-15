@@ -1,17 +1,17 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Role, Team } from '@control17/sdk/types';
+import type { Role, Squadron } from '@control17/sdk/types';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ConfigNotFoundError,
   createSlotStore,
   defaultConfigPath,
   hashToken,
-  loadTeamConfigFromFile,
+  loadSquadronConfigFromFile,
   SlotLoadError,
   TOKEN_HASH_PREFIX,
-  writeTeamConfig,
+  writeSquadronConfig,
 } from '../src/slots.js';
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ function writeConfig(content: string, name = 'control17.json'): string {
   return path;
 }
 
-const SAMPLE_TEAM: Team = {
+const SAMPLE_SQUADRON: Squadron = {
   name: 'alpha-squadron',
   mission: 'Ship the payment service.',
   brief: 'We own the full lifecycle.',
@@ -45,9 +45,8 @@ const SAMPLE_TEAM: Team = {
 
 const SAMPLE_ROLES: Record<string, Role> = {
   operator: {
-    description: 'Directs the team.',
+    description: 'Directs the squadron.',
     instructions: 'Lead.',
-    editor: true,
   },
   implementer: {
     description: 'Writes code.',
@@ -104,12 +103,14 @@ describe('createSlotStore', () => {
     expect(store.resolve('op-token')).toEqual({
       callsign: 'ACTUAL',
       role: 'operator',
+      authority: 'operator',
       totpSecret: null,
       totpLastCounter: 0,
     });
     expect(store.resolve('impl-token')).toEqual({
       callsign: 'ALPHA-1',
       role: 'implementer',
+      authority: 'operator',
       totpSecret: null,
       totpLastCounter: 0,
     });
@@ -139,18 +140,18 @@ describe('createSlotStore', () => {
   });
 });
 
-// ── loadTeamConfigFromFile ──────────────────────────────────────────
+// ── loadSquadronConfigFromFile ──────────────────────────────────────────
 
-describe('loadTeamConfigFromFile', () => {
+describe('loadSquadronConfigFromFile', () => {
   it('loads a well-formed hashed config without rewriting the file', () => {
     const aliceHash = hashToken('c17_op_secret');
     const implHash = hashToken('c17_impl_secret');
     const original = JSON.stringify(
       {
-        team: SAMPLE_TEAM,
+        squadron: SAMPLE_SQUADRON,
         roles: SAMPLE_ROLES,
         slots: [
-          { callsign: 'ACTUAL', role: 'operator', tokenHash: aliceHash },
+          { callsign: 'ACTUAL', role: 'operator', authority: 'commander', tokenHash: aliceHash },
           { callsign: 'ALPHA-1', role: 'implementer', tokenHash: implHash },
         ],
       },
@@ -158,28 +159,28 @@ describe('loadTeamConfigFromFile', () => {
       2,
     );
     const path = writeConfig(original);
-    const config = loadTeamConfigFromFile(path);
+    const config = loadSquadronConfigFromFile(path);
     expect(config.store.size()).toBe(2);
     expect(config.store.resolve('c17_op_secret')?.callsign).toBe('ACTUAL');
     expect(config.store.resolve('c17_impl_secret')?.role).toBe('implementer');
     expect(config.migrated).toBe(0);
-    expect(config.team).toEqual(SAMPLE_TEAM);
-    expect(config.roles.operator?.editor).toBe(true);
+    expect(config.squadron).toEqual(SAMPLE_SQUADRON);
+    expect(config.roles.operator?.description).toContain('squadron');
     expect(readFileSync(path, 'utf8')).toBe(original);
   });
 
   it('auto-migrates plaintext tokens to hashes and rewrites the file', () => {
     const path = writeConfig(
       JSON.stringify({
-        team: SAMPLE_TEAM,
+        squadron: SAMPLE_SQUADRON,
         roles: SAMPLE_ROLES,
         slots: [
-          { callsign: 'ACTUAL', role: 'operator', token: 'c17_op_secret' },
+          { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'c17_op_secret' },
           { callsign: 'ALPHA-1', role: 'implementer', token: 'c17_impl_secret' },
         ],
       }),
     );
-    const config = loadTeamConfigFromFile(path);
+    const config = loadSquadronConfigFromFile(path);
     expect(config.store.resolve('c17_op_secret')?.callsign).toBe('ACTUAL');
     expect(config.migrated).toBe(2);
 
@@ -193,16 +194,16 @@ describe('loadTeamConfigFromFile', () => {
     }
 
     // Re-loading the rewritten file must still resolve the original plaintext.
-    const reload = loadTeamConfigFromFile(path);
+    const reload = loadSquadronConfigFromFile(path);
     expect(reload.migrated).toBe(0);
     expect(reload.store.resolve('c17_op_secret')?.callsign).toBe('ACTUAL');
   });
 
   it('throws ConfigNotFoundError when the file is missing', () => {
     const path = join(tmpDir(), 'does-not-exist.json');
-    expect(() => loadTeamConfigFromFile(path)).toThrow(ConfigNotFoundError);
+    expect(() => loadSquadronConfigFromFile(path)).toThrow(ConfigNotFoundError);
     try {
-      loadTeamConfigFromFile(path);
+      loadSquadronConfigFromFile(path);
     } catch (err) {
       expect(err).toBeInstanceOf(ConfigNotFoundError);
       expect((err as ConfigNotFoundError).path).toBe(path);
@@ -215,56 +216,58 @@ describe('loadTeamConfigFromFile', () => {
         tokens: [{ name: 'alice', kind: 'human', token: 'c17_legacy' }],
       }),
     );
-    expect(() => loadTeamConfigFromFile(path)).toThrow(/legacy `tokens` schema/);
+    expect(() => loadSquadronConfigFromFile(path)).toThrow(/legacy `tokens` schema/);
   });
 
   it('rejects malformed JSON', () => {
     const path = writeConfig('{not valid json');
-    expect(() => loadTeamConfigFromFile(path)).toThrow(/not valid JSON/);
+    expect(() => loadSquadronConfigFromFile(path)).toThrow(/not valid JSON/);
   });
 
   it('rejects empty slots lists', () => {
-    const path = writeConfig(JSON.stringify({ team: SAMPLE_TEAM, roles: SAMPLE_ROLES, slots: [] }));
-    expect(() => loadTeamConfigFromFile(path)).toThrow(/at least one entry/);
+    const path = writeConfig(
+      JSON.stringify({ squadron: SAMPLE_SQUADRON, roles: SAMPLE_ROLES, slots: [] }),
+    );
+    expect(() => loadSquadronConfigFromFile(path)).toThrow(/at least one entry/);
   });
 
   it('rejects slots referencing an unknown role', () => {
     const path = writeConfig(
       JSON.stringify({
-        team: SAMPLE_TEAM,
+        squadron: SAMPLE_SQUADRON,
         roles: SAMPLE_ROLES,
         slots: [{ callsign: 'GHOST', role: 'phantom', token: 'c17_ghost_secret' }],
       }),
     );
-    expect(() => loadTeamConfigFromFile(path)).toThrow(/unknown role 'phantom'/);
+    expect(() => loadSquadronConfigFromFile(path)).toThrow(/unknown role 'phantom'/);
   });
 
   it('rejects callsigns with invalid characters', () => {
     const path = writeConfig(
       JSON.stringify({
-        team: SAMPLE_TEAM,
+        squadron: SAMPLE_SQUADRON,
         roles: SAMPLE_ROLES,
         slots: [{ callsign: 'has spaces', role: 'operator', token: 'c17_bad_secret' }],
       }),
     );
-    expect(() => loadTeamConfigFromFile(path)).toThrow();
+    expect(() => loadSquadronConfigFromFile(path)).toThrow();
   });
 
   it('rejects a slot with neither token nor tokenHash', () => {
     const path = writeConfig(
       JSON.stringify({
-        team: SAMPLE_TEAM,
+        squadron: SAMPLE_SQUADRON,
         roles: SAMPLE_ROLES,
         slots: [{ callsign: 'ACTUAL', role: 'operator' }],
       }),
     );
-    expect(() => loadTeamConfigFromFile(path)).toThrow();
+    expect(() => loadSquadronConfigFromFile(path)).toThrow();
   });
 
   it('rejects a slot with both token and tokenHash', () => {
     const path = writeConfig(
       JSON.stringify({
-        team: SAMPLE_TEAM,
+        squadron: SAMPLE_SQUADRON,
         roles: SAMPLE_ROLES,
         slots: [
           {
@@ -276,33 +279,33 @@ describe('loadTeamConfigFromFile', () => {
         ],
       }),
     );
-    expect(() => loadTeamConfigFromFile(path)).toThrow();
+    expect(() => loadSquadronConfigFromFile(path)).toThrow();
   });
 });
 
-// ── writeTeamConfig ─────────────────────────────────────────────────
+// ── writeSquadronConfig ─────────────────────────────────────────────────
 
-describe('writeTeamConfig', () => {
+describe('writeSquadronConfig', () => {
   it('writes a config that loads cleanly and resolves the original plaintext', () => {
     const path = join(tmpDir(), 'control17.json');
-    writeTeamConfig(path, SAMPLE_TEAM, SAMPLE_ROLES, [
-      { callsign: 'ACTUAL', role: 'operator', token: 'c17_plain_op' },
+    writeSquadronConfig(path, SAMPLE_SQUADRON, SAMPLE_ROLES, [
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'c17_plain_op' },
       { callsign: 'ALPHA-1', role: 'implementer', token: 'c17_plain_impl' },
     ]);
 
     const body = JSON.parse(readFileSync(path, 'utf8')) as {
-      team: Team;
+      squadron: Squadron;
       roles: Record<string, Role>;
       slots: Array<{ token?: string; tokenHash?: string }>;
     };
-    expect(body.team).toEqual(SAMPLE_TEAM);
-    expect(body.roles.operator?.editor).toBe(true);
+    expect(body.squadron).toEqual(SAMPLE_SQUADRON);
+    expect(body.roles.operator?.description).toContain('squadron');
     for (const slot of body.slots) {
       expect(slot.token).toBeUndefined();
       expect(slot.tokenHash).toMatch(/^sha256:/);
     }
 
-    const config = loadTeamConfigFromFile(path);
+    const config = loadSquadronConfigFromFile(path);
     expect(config.migrated).toBe(0);
     expect(config.store.resolve('c17_plain_op')?.callsign).toBe('ACTUAL');
     expect(config.store.resolve('c17_plain_impl')?.role).toBe('implementer');

@@ -69,13 +69,15 @@ describe('Broker.seedSlots', () => {
   it('pre-populates the registry with every slot', () => {
     const { broker } = makeBroker();
     broker.seedSlots([
-      { callsign: 'ACTUAL', role: 'operator' },
-      { callsign: 'ALPHA-1', role: 'implementer' },
-      { callsign: 'SIERRA', role: 'reviewer' },
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+      { callsign: 'ALPHA-1', role: 'implementer', authority: 'operator' },
+      { callsign: 'SIERRA', role: 'reviewer', authority: 'lieutenant' },
     ]);
     const agents = broker.listAgents();
     expect(agents.map((a) => a.agentId).sort()).toEqual(['ACTUAL', 'ALPHA-1', 'SIERRA']);
     expect(agents.find((a) => a.agentId === 'ACTUAL')?.role).toBe('operator');
+    expect(agents.find((a) => a.agentId === 'ACTUAL')?.authority).toBe('commander');
+    expect(agents.find((a) => a.agentId === 'SIERRA')?.authority).toBe('lieutenant');
     expect(agents.every((a) => a.connected === 0)).toBe(true);
   });
 });

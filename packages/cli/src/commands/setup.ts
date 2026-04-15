@@ -42,11 +42,11 @@ export async function runSetupCommand(
   // diagnostic showing what's already there — that's usually enough
   // to realize they didn't actually want to re-run setup.
   try {
-    const existing = server.loadTeamConfigFromFile(configPath);
+    const existing = server.loadSquadronConfigFromFile(configPath);
     throw new UsageError(
       `setup: a config already exists at ${configPath}\n` +
-        `  team:   ${existing.team.name}\n` +
-        `  slots:  ${existing.store.size()} (${existing.store.callsigns().join(', ')})\n` +
+        `  squadron: ${existing.squadron.name}\n` +
+        `  slots:    ${existing.store.size()} (${existing.store.callsigns().join(', ')})\n` +
         '\n' +
         '  Running the wizard now would overwrite every slot token and\n' +
         '  invalidate any deployed links. If that is what you want,\n' +
@@ -78,9 +78,9 @@ export async function runSetupCommand(
     const config = await server.runFirstRunWizard({ configPath, io });
     stdout('');
     stdout('✓ setup complete');
-    stdout(`  team:   ${config.team.name}`);
-    stdout(`  slots:  ${config.store.callsigns().join(', ')}`);
-    stdout(`  config: ${configPath}`);
+    stdout(`  squadron: ${config.squadron.name}`);
+    stdout(`  slots:    ${config.store.callsigns().join(', ')}`);
+    stdout(`  config:   ${configPath}`);
     stdout('');
     stdout('Next steps:');
     stdout('  pnpm dev          # watch-mode server + Vite dev for the web UI');

@@ -20,6 +20,7 @@
 import { signal } from '@preact/signals';
 import { getClient } from './client.js';
 import { appendMessages } from './messages.js';
+import { loadObjectives } from './objectives.js';
 
 export const streamConnected = signal(false);
 
@@ -69,10 +70,19 @@ export function startSubscribe(options: StartSubscribeOptions): () => void {
       if (!event.data) return;
       try {
         const parsed = JSON.parse(event.data) as unknown;
-        // Trust the shape — server validates on the way out. If a
-        // malformed frame sneaks through, appendMessages' typing
-        // catches it at the signal level.
-        appendMessages(callsign, [parsed as Parameters<typeof appendMessages>[1][number]]);
+        const msg = parsed as Parameters<typeof appendMessages>[1][number];
+        appendMessages(callsign, [msg]);
+        // If this frame carried an objective event, refresh the
+        // objectives signal so the sidebar count + panel stay in sync
+        // with the server's authoritative state. Fire-and-forget —
+        // stale-for-a-moment is fine since the SSE message itself
+        // carries enough text for the Transcript to render.
+        const data = msg?.data as Record<string, unknown> | undefined;
+        if (data && data.kind === 'objective') {
+          void loadObjectives().catch(() => {
+            /* swallow — next event will retry */
+          });
+        }
       } catch (err) {
         onError?.(err);
       }

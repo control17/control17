@@ -116,7 +116,7 @@ export class Broker {
   seedSlots(slots: Iterable<Slot>): void {
     const ts = this.now();
     for (const slot of slots) {
-      this.registry.registerOrGet(slot.callsign, ts, slot.role);
+      this.registry.registerOrGet(slot.callsign, ts, slot.role, slot.authority);
     }
   }
 

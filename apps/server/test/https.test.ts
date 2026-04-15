@@ -10,7 +10,7 @@ import { connect as http2Connect } from 'node:http2';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Broker, InMemoryEventLog } from '@control17/core';
-import type { Role, Team } from '@control17/sdk/types';
+import type { Role, Squadron } from '@control17/sdk/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { openDatabase } from '../src/db.js';
@@ -23,14 +23,14 @@ import { createSlotStore } from '../src/slots.js';
 
 const OP_TOKEN = 'c17_https_test_operator_token';
 
-const TEAM: Team = {
+const SQUADRON: Squadron = {
   name: 'alpha-squadron',
   mission: 'Verify the HTTPS surface.',
   brief: '',
 };
 
 const ROLES: Record<string, Role> = {
-  operator: { description: '', instructions: '', editor: true },
+  operator: { description: '', instructions: '' },
 };
 
 const dirsToClean: string[] = [];
@@ -227,8 +227,8 @@ describe('secureCookies option', () => {
       {
         callsign: 'ACTUAL',
         role: 'operator',
+        authority: 'commander',
         token: OP_TOKEN,
-        // Generate a TOTP secret so we can exercise the login path.
         totpSecret: 'JBSWY3DPEHPK3PXP',
       },
     ]);
@@ -249,7 +249,7 @@ describe('secureCookies option', () => {
       broker,
       slots,
       sessions,
-      team: TEAM,
+      squadron: SQUADRON,
       roles: ROLES,
       version: '0.0.0',
       secureCookies: true,
@@ -275,10 +275,12 @@ describe('secureCookies option', () => {
 describe('runServer with self-signed HTTPS', () => {
   it('boots on HTTP/2 and responds to /healthz', async () => {
     const configDir = tmpDir();
-    const slots = createSlotStore([{ callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN }]);
+    const slots = createSlotStore([
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: OP_TOKEN },
+    ]);
     const running = await runServer({
       slots,
-      team: TEAM,
+      squadron: SQUADRON,
       roles: ROLES,
       https: {
         mode: 'self-signed',
@@ -329,8 +331,10 @@ describe('runServer with self-signed HTTPS', () => {
 
     // First boot: generates + persists.
     const r1 = await runServer({
-      slots: createSlotStore([{ callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN }]),
-      team: TEAM,
+      slots: createSlotStore([
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: OP_TOKEN },
+      ]),
+      squadron: SQUADRON,
       roles: ROLES,
       https: {
         mode: 'self-signed',
@@ -352,8 +356,10 @@ describe('runServer with self-signed HTTPS', () => {
 
     // Second boot: reuses.
     const r2 = await runServer({
-      slots: createSlotStore([{ callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN }]),
-      team: TEAM,
+      slots: createSlotStore([
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: OP_TOKEN },
+      ]),
+      squadron: SQUADRON,
       roles: ROLES,
       https: {
         mode: 'self-signed',

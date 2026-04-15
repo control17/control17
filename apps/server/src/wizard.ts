@@ -2,34 +2,33 @@
  * First-run interactive wizard for the control17 broker.
  *
  * Triggered when the server boots without a config file at the expected
- * path AND stdin is a TTY. Walks the operator through creating a team
- * (name, mission, brief) and its initial slots, generates fresh random
- * tokens per slot, optionally enrolls editor-role slots in TOTP for
- * web-UI login, writes a hashed config to disk (0o600), and returns
- * the loaded `TeamConfig`.
+ * path AND stdin is a TTY. Walks the operator through creating a
+ * squadron (name, mission, brief) and its initial slots, generates
+ * fresh random tokens per slot, optionally enrolls human-operator
+ * slots in TOTP for web-UI login, writes a hashed config to disk
+ * (0o600), and returns the loaded `SquadronConfig`.
  *
- * The wizard is pure IO-over-callbacks so it can be unit-tested without
- * a real terminal. `runFirstRunWizard` takes a `WizardIO` and never
- * touches `process.stdin`/`process.stdout` itself; the CLI entry points
- * build a default TTY-backed `WizardIO` via `createTtyWizardIO`.
+ * Authority model: the first slot is always a commander (at least one
+ * commander is required). Subsequent slots prompt for their authority
+ * tier (commander / lieutenant / operator) defaulting to operator.
  *
  * Default role bundle: the wizard always ships 4 starter role
  * definitions (operator, implementer, reviewer, watcher) in the
- * generated config. The operator role gets `editor: true`. Users can
- * edit, remove, or add roles in the config file after the wizard runs.
+ * generated config. Users can edit, remove, or add roles in the config
+ * file after the wizard runs.
  */
 
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
-import type { Role, Team } from '@control17/sdk/types';
+import type { Authority, Role, Squadron } from '@control17/sdk/types';
 // qrcode-terminal is CJS; default-import the namespace and destructure.
 import qrcodeTerminal from 'qrcode-terminal';
 import {
   createSlotStore,
   defaultHttpsConfig,
   SlotLoadError,
-  type TeamConfig,
-  writeTeamConfig,
+  type SquadronConfig,
+  writeSquadronConfig,
 } from './slots.js';
 import { generateSecret, otpauthUri, verifyCode } from './totp.js';
 
@@ -53,6 +52,7 @@ const TOTP_MAX_CONFIRM_ATTEMPTS = 3;
 interface WizardSlot {
   callsign: string;
   role: string;
+  authority: Authority;
   token: string;
   /** Set when the user enrolls this slot in TOTP during the wizard. */
   totpSecret?: string | null;
@@ -96,46 +96,45 @@ export interface RunWizardOptions {
   qrRenderer?: (uri: string) => string;
 }
 
-/** Starter role definitions shipped with every new team config. */
+/** Starter role definitions shipped with every new squadron config. */
 export const DEFAULT_ROLES: Record<string, Role> = {
   operator: {
-    description: 'Directs the team, makes go/no-go calls, handles escalations.',
+    description: 'Directs the squadron, makes go/no-go calls, handles escalations.',
     instructions:
-      'The operator role on this team directs activity in the team channel, ' +
-      'assigns tasks to teammates via DM, and handles escalations. Issue clear ' +
-      'directives and keep the team aligned on the mission.',
-    editor: true,
+      'The operator role in this squadron directs activity in the squadron channel, ' +
+      'assigns objectives to teammates, and handles escalations. Issue clear ' +
+      'directives and keep the squadron aligned on the mission.',
   },
   implementer: {
     description: 'Writes and ships work — code, configuration, content.',
     instructions:
-      'The implementer role on this team does the hands-on work. Take direction ' +
-      'from the operator, report progress in the team channel, and use DMs for ' +
-      'clarifications. When you finish a task, announce it so reviewers can pick it up.',
+      'The implementer role in this squadron does the hands-on work. Take direction ' +
+      'from command, report progress in the squadron channel, and use DMs for ' +
+      'clarifications. When you finish an objective, mark it complete with a clear result.',
   },
   reviewer: {
     description: 'Checks implementer work before it ships.',
     instructions:
-      'The reviewer role on this team verifies work before it ships. Read updates ' +
-      'posted in the team channel, check for quality and correctness, and post ' +
+      'The reviewer role in this squadron verifies work before it ships. Read updates ' +
+      'posted in the squadron channel, check for quality and correctness, and post ' +
       'approve or request-changes decisions with clear rationale.',
   },
   watcher: {
-    description: 'Passively monitors team activity and flags anomalies.',
+    description: 'Passively monitors squadron activity and flags anomalies.',
     instructions:
-      'The watcher role on this team observes team activity without initiating ' +
-      'work. Surface unusual signals, blockers, or quiet stretches to the operator ' +
+      'The watcher role in this squadron observes activity without initiating ' +
+      'work. Surface unusual signals, blockers, or quiet stretches to command ' +
       'via DM. Stay out of the way unless you see something worth raising.',
   },
 };
 
 /**
  * Drive the wizard to completion, write the config file, and return
- * the loaded team config. Throws `SlotLoadError` if the IO is not
+ * the loaded squadron config. Throws `SlotLoadError` if the IO is not
  * interactive — the CLI catches that and prints a friendly
  * non-interactive hint instead.
  */
-export async function runFirstRunWizard(options: RunWizardOptions): Promise<TeamConfig> {
+export async function runFirstRunWizard(options: RunWizardOptions): Promise<SquadronConfig> {
   const { io, configPath } = options;
   const mintToken = options.tokenFactory ?? defaultTokenFactory;
   const mintTotpSecret = options.totpSecretFactory ?? generateSecret;
@@ -153,18 +152,19 @@ export async function runFirstRunWizard(options: RunWizardOptions): Promise<Team
   io.println(`control17: no config file found at`);
   io.println(`  ${configPath}`);
   io.println('');
-  io.println(`Let's set up a team. We'll ask for a name, mission, brief, and slots,`);
+  io.println(`Let's set up a squadron. We'll ask for a name, mission, brief, and slots,`);
   io.println(`then generate tokens. Copy each token somewhere safe as it appears —`);
   io.println(`they're hashed on disk and can't be recovered afterward.`);
   io.println('');
 
-  // ── Team ─────────────────────────────────────────────────────────
-  io.println('-- team --');
-  const team = await promptTeam(io);
+  // ── Squadron ────────────────────────────────────────────────────
+  io.println('-- squadron --');
+  const squadron = await promptSquadron(io);
 
   io.println('');
   io.println('-- slots --');
   io.println(`(built-in roles: ${Object.keys(DEFAULT_ROLES).join(', ')}; custom roles OK)`);
+  io.println(`(the first slot is the commander — required for every squadron)`);
 
   const slots: WizardSlot[] = [];
   const usedCallsigns = new Set<string>();
@@ -176,15 +176,14 @@ export async function runFirstRunWizard(options: RunWizardOptions): Promise<Team
 
     const bannerLines = printTokenBanner(io, slot);
     await io.prompt('press enter once you have saved the token above ');
-    // Wipe the banner + its prompt from visible scrollback. The +1 is
-    // for the "press enter once..." prompt line that readline writes.
     io.redactLines?.(bannerLines + 1);
 
-    // Offer TOTP enrollment for editor-flagged slots (default: operator).
-    // Users who only want machine-plane access can skip — the bearer
-    // token is still the recovery path via `c17 enroll` later.
-    if (DEFAULT_ROLES[slot.role]?.editor) {
-      const totpSecret = await promptTotpEnrollment(io, slot, team, {
+    // Offer TOTP enrollment for slots with elevated authority
+    // (commander + lieutenant). Plain operators can still enroll later
+    // via `c17 enroll` — the wizard just defaults to "machine-plane
+    // only" for the common case of AI-agent operator slots.
+    if (slot.authority !== 'operator') {
+      const totpSecret = await promptTotpEnrollment(io, slot, squadron, {
         mintTotpSecret,
         now: nowFn,
         renderQr,
@@ -198,11 +197,19 @@ export async function runFirstRunWizard(options: RunWizardOptions): Promise<Team
     if (more !== 'y' && more !== 'yes') break;
   }
 
+  // Validate: at least one commander. Since the first slot is always
+  // prompted with commander as the default this is normally satisfied,
+  // but a paranoid user could type `operator` — catch that here rather
+  // than letting the loader reject the write.
+  const hasCommander = slots.some((s) => s.authority === 'commander');
+  if (!hasCommander) {
+    throw new SlotLoadError(
+      'at least one slot must have authority=commander. Re-run the wizard to set one.',
+    );
+  }
+
   // Start from the 4 default roles, then auto-add a placeholder for
-  // any custom role a slot referenced. Without this, the generated
-  // config would fail validation on next boot because a slot would
-  // point at an undefined role key. The placeholder is intentionally
-  // minimal so the user is prompted to fill it in.
+  // any custom role a slot referenced.
   const roles: Record<string, Role> = { ...DEFAULT_ROLES };
   for (const slot of slots) {
     if (!Object.hasOwn(roles, slot.role)) {
@@ -214,10 +221,10 @@ export async function runFirstRunWizard(options: RunWizardOptions): Promise<Team
       };
     }
   }
-  writeTeamConfig(configPath, team, roles, slots);
+  writeSquadronConfig(configPath, squadron, roles, slots);
 
   io.println('');
-  io.println(`wrote team '${team.name}' with ${slots.length} slot(s) to`);
+  io.println(`wrote squadron '${squadron.name}' with ${slots.length} slot(s) to`);
   io.println(`  ${configPath}`);
   io.println('file is chmod 600; tokens are stored as SHA-256 hashes only.');
   const enrolled = slots.filter((s) => s.totpSecret);
@@ -228,7 +235,7 @@ export async function runFirstRunWizard(options: RunWizardOptions): Promise<Team
 
   const store = createSlotStore(slots);
   return {
-    team,
+    squadron,
     roles,
     store,
     https: defaultHttpsConfig(),
@@ -237,9 +244,12 @@ export async function runFirstRunWizard(options: RunWizardOptions): Promise<Team
   };
 }
 
-async function promptTeam(io: WizardIO): Promise<Team> {
-  const name = await promptRequired(io, 'team name [squadron]: ', 'squadron', (v) =>
-    v.length > 0 && v.length <= 128 ? null : 'must be 1-128 characters',
+async function promptSquadron(io: WizardIO): Promise<Squadron> {
+  const name = await promptRequired(
+    io,
+    'squadron name [alpha-squadron]: ',
+    'alpha-squadron',
+    (v) => (v.length > 0 && v.length <= 128 ? null : 'must be 1-128 characters'),
   );
   const mission = await promptRequired(
     io,
@@ -278,7 +288,25 @@ async function collectSlot(
   io.println(first ? '' : '');
   const callsign = await promptCallsign(io, usedCallsigns, first);
   const role = await promptRole(io, first);
-  return { callsign, role, token: mintToken() };
+  const authority = await promptAuthority(io, first);
+  return { callsign, role, authority, token: mintToken() };
+}
+
+async function promptAuthority(io: WizardIO, first: boolean): Promise<Authority> {
+  // First slot defaults to commander since every squadron must have
+  // at least one. Subsequent slots default to operator — the common
+  // case is AI-agent operators under a single human commander.
+  const suggested: Authority = first ? 'commander' : 'operator';
+  while (true) {
+    const raw = (await io.prompt(`authority [commander | lieutenant | operator] [${suggested}]: `))
+      .trim()
+      .toLowerCase();
+    const candidate = raw.length === 0 ? suggested : raw;
+    if (candidate === 'commander' || candidate === 'lieutenant' || candidate === 'operator') {
+      return candidate;
+    }
+    io.println('  authority must be one of: commander, lieutenant, operator');
+  }
 }
 
 async function promptCallsign(
@@ -378,7 +406,7 @@ function printTokenBanner(io: WizardIO, slot: WizardSlot): number {
 async function promptTotpEnrollment(
   io: WizardIO,
   slot: WizardSlot,
-  _team: Team,
+  _squadron: Squadron,
   deps: {
     mintTotpSecret: () => string;
     now: () => number;

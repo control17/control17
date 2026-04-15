@@ -154,8 +154,8 @@ describe('<Sidebar /> unread indicators', () => {
   function setRoster() {
     roster.value = {
       teammates: [
-        { callsign: 'me', role: 'operator' },
-        { callsign: 'build-bot', role: 'implementer' },
+        { callsign: 'me', role: 'operator', authority: 'commander' },
+        { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
       ],
       connected: [],
     };

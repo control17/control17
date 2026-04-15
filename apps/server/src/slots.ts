@@ -1,10 +1,11 @@
 /**
- * Team config loading for the control17 server.
+ * Squadron config loading for the control17 server.
  *
- * A team config defines the mission, the roles, and the slots that
- * make up the team. A slot is a reserved position — callsign + role +
- * secret token that authenticates incoming requests. The server is
- * always one team (multi-team coordination lives at the SaaS layer).
+ * A squadron config defines the mission, the roles, and the slots that
+ * make up the squadron. A slot is a reserved position — callsign + role +
+ * authority tier + secret token that authenticates incoming requests.
+ * The server is always one squadron (multi-squadron coordination lives
+ * at the SaaS layer).
  *
  * On disk the config stores SHA-256 hashes, not plaintext secrets.
  * Humans editing the file by hand can paste a plaintext `token`; the
@@ -16,25 +17,25 @@
  *
  *   {
  *     "_comment": "...",
- *     "team": {
+ *     "squadron": {
  *       "name": "alpha-squadron",
  *       "mission": "Ship the payment service.",
  *       "brief": "We own the full lifecycle..."
  *     },
  *     "roles": {
- *       "operator":    { "description": "...", "instructions": "...", "editor": true },
+ *       "operator":    { "description": "...", "instructions": "..." },
  *       "implementer": { "description": "...", "instructions": "..." }
  *     },
  *     "slots": [
- *       { "callsign": "ACTUAL",  "role": "operator",    "tokenHash": "sha256:..." },
- *       { "callsign": "ALPHA-1", "role": "implementer", "token":     "c17_plaintext_for_migration" }
+ *       { "callsign": "ACTUAL",  "role": "operator",    "authority": "commander",  "tokenHash": "sha256:..." },
+ *       { "callsign": "LT-ONE",  "role": "operator",    "authority": "lieutenant", "tokenHash": "sha256:..." },
+ *       { "callsign": "ALPHA-1", "role": "implementer",                             "token":     "c17_plaintext_for_migration" }
  *     ]
  *   }
  *
- * The file path defaults to `./control17.json` (relative to the server's
- * working directory). An explicit `--config-path` flag or the
- * `C17_CONFIG_PATH` env var overrides it. On first run with no file,
- * the entry points drop into the team-setup wizard; see `wizard.ts`.
+ * Missing `authority` defaults to `operator`. The file path defaults
+ * to `./control17.json` (relative to the server's working directory);
+ * an explicit `--config-path` flag or `C17_CONFIG_PATH` env var overrides.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -50,16 +51,14 @@ import {
   writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { Role, Slot, Team, Teammate } from '@control17/sdk/types';
+import type { Authority, Role, Slot, Squadron, Teammate } from '@control17/sdk/types';
 import { z } from 'zod';
 
 export const TOKEN_HASH_PREFIX = 'sha256:';
 const DEFAULT_CONFIG_FILENAME = 'control17.json';
 
 /**
- * Hash a raw bearer token into the on-disk representation. The server
- * never persists plaintext and never logs the hash; it only uses it
- * as a map key for O(1) lookup on auth.
+ * Hash a raw bearer token into the on-disk representation.
  */
 export function hashToken(rawToken: string): string {
   return TOKEN_HASH_PREFIX + createHash('sha256').update(rawToken, 'utf8').digest('hex');
@@ -68,29 +67,17 @@ export function hashToken(rawToken: string): string {
 /**
  * A slot materialized in memory once hashes are known. Extends the
  * wire `Slot` with server-only fields — TOTP enrollment and replay
- * guard state. These never cross the network; they live in the store
- * to gate human web-UI logins.
+ * guard state. These never cross the network.
  */
 export interface LoadedSlot extends Slot {
-  /**
-   * Base32 TOTP secret, if this slot has been enrolled for web-UI
-   * login. null/undefined means machine-only — bearer token is the
-   * only way in. Enrollment is done by the wizard or by `c17 enroll`.
-   */
   totpSecret?: string | null;
-  /**
-   * Counter of the last accepted TOTP code. `verifyCode` rejects any
-   * code whose counter is ≤ this, which prevents replay inside the
-   * same period and prevents accepting a "stale" code from a past
-   * period that's still within the ±1 tolerance window.
-   */
   totpLastCounter?: number;
 }
 
 const CALLSIGN_REGEX = /^[a-zA-Z0-9._-]+$/;
 const ROLE_KEY_REGEX = /^[a-zA-Z0-9._-]+$/;
 
-const TeamSchema = z.object({
+const SquadronSchema = z.object({
   name: z.string().min(1).max(128),
   mission: z.string().min(1).max(512),
   brief: z.string().max(4096).default(''),
@@ -99,12 +86,11 @@ const TeamSchema = z.object({
 const RoleSchema = z.object({
   description: z.string().max(512).default(''),
   instructions: z.string().max(8192).default(''),
-  editor: z.boolean().optional(),
 });
 
+const AuthoritySchema = z.enum(['commander', 'lieutenant', 'operator']);
+
 // Base32 alphabet (RFC 4648) — TOTP secrets from `otpauth` use this.
-// Accept any length ≥ 16 chars (80-bit minimum) for flexibility, even
-// though control17's generator always produces 32-char (160-bit) secrets.
 const TOTP_SECRET_REGEX = /^[A-Z2-7]+=*$/;
 
 const SlotEntrySchema = z
@@ -119,6 +105,7 @@ const SlotEntrySchema = z
       .min(1)
       .max(64)
       .regex(ROLE_KEY_REGEX, 'role must be alphanumeric with . _ - allowed'),
+    authority: AuthoritySchema.default('operator'),
     token: z.string().min(8, 'token must be at least 8 characters').optional(),
     tokenHash: z
       .string()
@@ -137,20 +124,7 @@ const SlotEntrySchema = z
     message: 'exactly one of `token` or `tokenHash` is required',
   });
 
-/**
- * HTTPS configuration embedded in the team config file. Kept here
- * rather than a separate file so there's exactly one thing the user
- * edits to configure the server. All fields are optional with sensible
- * defaults — an absent `https` block means "HTTP only, localhost".
- *
- *   mode: 'off'         — plain HTTP on bindHttp (localhost dev)
- *   mode: 'self-signed' — auto-gen a cert stored next to the config
- *   mode: 'custom'      — load cert/key from user-supplied paths
- *
- * Future: 'acme' for Let's Encrypt. Not in v1.
- */
 const SelfSignedConfigSchema = z.object({
-  /** IPv4 to add as a SAN. Null = auto-detect when bound non-loopback. */
   lanIp: z.string().nullable().default(null),
   validityDays: z.number().int().positive().max(3650).default(365),
   regenerateIfExpiringWithin: z.number().int().nonnegative().max(365).default(30),
@@ -161,11 +135,6 @@ const CustomHttpsConfigSchema = z.object({
   keyPath: z.string().nullable().default(null),
 });
 
-/**
- * Web Push (VAPID) config. Generated on first boot and persisted to
- * the team config file — rotating these keys invalidates every
- * existing push subscription, so they're treated as long-lived state.
- */
 const WebPushConfigSchema = z.object({
   vapidPublicKey: z.string().min(1),
   vapidPrivateKey: z.string().min(1),
@@ -176,17 +145,7 @@ const HttpsConfigSchema = z.object({
   mode: z.enum(['off', 'self-signed', 'custom']).default('off'),
   bindHttp: z.number().int().min(1).max(65535).default(8717),
   bindHttps: z.number().int().min(1).max(65535).default(7443),
-  /**
-   * When HTTPS is active, run a parallel HTTP listener on `bindHttp`
-   * that 308-redirects every request to HTTPS. Off disables the
-   * redirect listener entirely.
-   */
   redirectHttpToHttps: z.boolean().default(true),
-  /**
-   * HSTS header policy. `auto` = on only when we're using a real
-   * (non-self-signed) cert, which for v1 never — stays off until
-   * ACME lands. Explicit `true`/`false` overrides for power users.
-   */
   hsts: z.enum(['auto', 'on', 'off']).default('auto'),
   selfSigned: SelfSignedConfigSchema.default({
     lanIp: null,
@@ -196,29 +155,18 @@ const HttpsConfigSchema = z.object({
   custom: CustomHttpsConfigSchema.default({ certPath: null, keyPath: null }),
 });
 
-const TeamConfigSchema = z.object({
+const SquadronConfigSchema = z.object({
   _comment: z.unknown().optional(),
-  team: TeamSchema,
+  squadron: SquadronSchema,
   roles: z.record(z.string().min(1).max(64), RoleSchema),
   slots: z.array(SlotEntrySchema).min(1, 'slots must contain at least one entry'),
   https: HttpsConfigSchema.optional(),
   webPush: WebPushConfigSchema.optional(),
 });
 
-/**
- * Fully-resolved HTTPS config — every field non-optional, defaults
- * applied. This is what runServer and the https/* modules consume.
- */
 export type HttpsConfig = z.infer<typeof HttpsConfigSchema>;
-
-/** VAPID credentials for browser Web Push. Persistent per deployment. */
 export type WebPushConfig = z.infer<typeof WebPushConfigSchema>;
 
-/**
- * Thrown when a config file exists but cannot be loaded — invalid
- * JSON, schema violation, duplicate callsigns, or IO error that isn't
- * ENOENT. These are unrecoverable without operator intervention.
- */
 export class SlotLoadError extends Error {
   constructor(message: string) {
     super(message);
@@ -226,12 +174,6 @@ export class SlotLoadError extends Error {
   }
 }
 
-/**
- * Thrown when the config file simply does not exist at the expected
- * path. This is recoverable: the CLI entry points catch it and drop
- * into the first-run wizard (or, if stdin isn't a TTY, print a
- * friendly message with an example config).
- */
 export class ConfigNotFoundError extends Error {
   readonly path: string;
   constructor(path: string) {
@@ -242,37 +184,15 @@ export class ConfigNotFoundError extends Error {
 }
 
 export interface SlotStore {
-  /** Look up the slot a raw bearer token maps to, or null if unknown. */
   resolve(rawToken: string): LoadedSlot | null;
-  /**
-   * Look up a slot by its callsign. Used by the TOTP login path (we
-   * have the callsign from the form body, not a token) and by the
-   * session resolver (cookie → stored slot callsign → LoadedSlot).
-   */
   resolveByCallsign(callsign: string): LoadedSlot | null;
-  /**
-   * Record a successful TOTP acceptance for a slot, persisting the new
-   * replay counter so subsequent logins reject any code with counter
-   * ≤ `counter`. Mutates the in-memory LoadedSlot and returns it.
-   */
   recordTotpAccept(callsign: string, counter: number): LoadedSlot | null;
-  /** Number of loaded slots. */
   size(): number;
-  /** All loaded slots (order matches the config file). */
   slots(): LoadedSlot[];
-  /** All callsigns (for startup diagnostics). */
   callsigns(): string[];
 }
 
 class MapSlotStore implements SlotStore {
-  // Keyed on the token hash (not the raw token), so a memory dump of
-  // the running server shows hashes only. `resolve()` hashes the
-  // incoming bearer token before looking up; the lookup itself is
-  // O(1) regardless of the store size (Map). Note: "O(1)" is not
-  // "constant-time" in the security sense — this is not a
-  // side-channel-resistant comparison, and isn't meant to be, since
-  // the attacker would need to pre-hash their guess and brute-force
-  // SHA-256 to exploit any timing difference.
   private readonly byHash = new Map<string, LoadedSlot>();
   private readonly byCallsign = new Map<string, LoadedSlot>();
   private readonly order: LoadedSlot[] = [];
@@ -300,12 +220,6 @@ class MapSlotStore implements SlotStore {
   recordTotpAccept(callsign: string, counter: number): LoadedSlot | null {
     const slot = this.byCallsign.get(callsign);
     if (!slot) return null;
-    // Mutate in place so every holder of the LoadedSlot reference sees
-    // the new counter. MapSlotStore is authoritative for runtime state.
-    // The on-disk counter isn't kept in sync on every login — we'd pay
-    // a file rewrite per request. On restart we reload counters from
-    // disk, meaning a process crash could theoretically let one stale
-    // code be replayed after restart; acceptable given the 30s window.
     slot.totpLastCounter = counter;
     return slot;
   }
@@ -325,14 +239,13 @@ class MapSlotStore implements SlotStore {
 
 /**
  * Build a slot store programmatically from plaintext entries. Used by
- * tests and by alternate runtimes (e.g. the SaaS DO adapter) that
- * don't load from a file on disk. Tokens are hashed before being put
- * into the map — the store never retains plaintext.
+ * tests and by alternate runtimes. Tokens are hashed before storage.
  */
 export function createSlotStore(
   entries: Array<{
     callsign: string;
     role: string;
+    authority?: Authority;
     token: string;
     totpSecret?: string | null;
     totpLastCounter?: number;
@@ -351,6 +264,7 @@ export function createSlotStore(
     store.addHashed(hashToken(entry.token), {
       callsign: entry.callsign,
       role: entry.role,
+      authority: entry.authority ?? 'operator',
       totpSecret: entry.totpSecret ?? null,
       totpLastCounter: entry.totpLastCounter ?? 0,
     });
@@ -358,11 +272,6 @@ export function createSlotStore(
   return store;
 }
 
-/**
- * Resolve the path to the config file. Explicit env var wins;
- * otherwise fall back to `./control17.json` relative to the server's
- * working directory.
- */
 export function defaultConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
@@ -372,32 +281,16 @@ export function defaultConfigPath(
   return join(cwd, DEFAULT_CONFIG_FILENAME);
 }
 
-/** Full team config materialized from disk. */
-export interface TeamConfig {
-  team: Team;
+/** Full squadron config materialized from disk. */
+export interface SquadronConfig {
+  squadron: Squadron;
   roles: Record<string, Role>;
   store: SlotStore;
-  /**
-   * HTTPS settings parsed from the config file's `https` block with
-   * all defaults applied. When the user omits the block entirely this
-   * is still present, populated with off-mode defaults (plain HTTP on
-   * 8717, no cert, localhost).
-   */
   https: HttpsConfig;
-  /**
-   * VAPID credentials from the config file's `webPush` block. Null
-   * means "never generated" — runServer() will create a fresh pair
-   * on first boot and persist them back via `writeWebPushConfig`.
-   */
   webPush: WebPushConfig | null;
   migrated: number;
 }
 
-/**
- * Default HTTPS config applied when the user omits the `https` block
- * entirely. Explicitly constructed rather than `schema.parse({})` so
- * downstream code sees a plain object with no zod branding.
- */
 export function defaultHttpsConfig(): HttpsConfig {
   return {
     mode: 'off',
@@ -423,7 +316,7 @@ export function defaultHttpsConfig(): HttpsConfig {
  * everything else. If any slot carried a plaintext `token`, the file
  * is rewritten with `tokenHash` and chmod 0o600 before returning.
  */
-export function loadTeamConfigFromFile(path: string): TeamConfig {
+export function loadSquadronConfigFromFile(path: string): SquadronConfig {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
@@ -441,21 +334,30 @@ export function loadTeamConfigFromFile(path: string): TeamConfig {
   }
 
   // Legacy schema detection — clean-break error pointing at the new format.
+  if (parsed && typeof parsed === 'object' && 'team' in parsed && !('squadron' in parsed)) {
+    throw new SlotLoadError(
+      `config file at ${path} uses the legacy \`team\` schema.\n` +
+        `control17 now uses a squadron/roles/slots schema with an authority tier on each slot.\n` +
+        `See apps/server/config.example.json for the new format, or delete this file and\n` +
+        `re-run to launch the setup wizard.`,
+    );
+  }
+  // Also catch the even-older `tokens` top-level array.
   if (
     parsed &&
     typeof parsed === 'object' &&
     'tokens' in parsed &&
-    !('team' in parsed) &&
+    !('squadron' in parsed) &&
     !('slots' in parsed)
   ) {
     throw new SlotLoadError(
       `config file at ${path} uses the legacy \`tokens\` schema.\n` +
-        `control17 now uses a team/roles/slots schema. See apps/server/config.example.json\n` +
+        `control17 now uses a squadron/roles/slots schema. See apps/server/config.example.json\n` +
         `for the new format, or delete this file and re-run to launch the setup wizard.`,
     );
   }
 
-  const result = TeamConfigSchema.safeParse(parsed);
+  const result = SquadronConfigSchema.safeParse(parsed);
   if (!result.success) {
     const issues = result.error.issues
       .map(
@@ -466,7 +368,7 @@ export function loadTeamConfigFromFile(path: string): TeamConfig {
     throw new SlotLoadError(`config file at ${path} is invalid:\n${issues}`);
   }
 
-  const team: Team = result.data.team;
+  const squadron: Squadron = result.data.squadron;
   const roles: Record<string, Role> = result.data.roles;
 
   // Every slot's role must reference a known role key.
@@ -477,6 +379,16 @@ export function loadTeamConfigFromFile(path: string): TeamConfig {
           `Known roles: ${Object.keys(roles).join(', ') || '(none)'}`,
       );
     }
+  }
+
+  // At least one slot must hold commander authority so there's always
+  // someone who can edit the squadron config.
+  const hasCommander = result.data.slots.some((s) => s.authority === 'commander');
+  if (!hasCommander) {
+    throw new SlotLoadError(
+      `squadron config at ${path} has no slot with authority='commander'. ` +
+        `At least one commander is required to administer the squadron.`,
+    );
   }
 
   const store = new MapSlotStore();
@@ -508,55 +420,54 @@ export function loadTeamConfigFromFile(path: string): TeamConfig {
     store.addHashed(tokenHash, {
       callsign: entry.callsign,
       role: entry.role,
+      authority: entry.authority,
       totpSecret,
       totpLastCounter,
     });
     onDisk.push({
       callsign: entry.callsign,
       role: entry.role,
+      authority: entry.authority,
       tokenHash,
       totpSecret,
       totpLastCounter,
     });
   }
 
-  // HTTPS config: `result.data.https` has defaults applied when the
-  // block is present but partial, and is undefined when the block is
-  // entirely absent. Fall back to the all-defaults config in that case.
   const https: HttpsConfig = result.data.https ?? defaultHttpsConfig();
   const webPush: WebPushConfig | null = result.data.webPush ?? null;
 
   if (migrated > 0) {
     const topComment =
       typeof result.data._comment === 'string' ? result.data._comment : CONFIG_FILE_COMMENT;
-    writeTeamConfigFile(path, topComment, team, roles, onDisk, https, webPush);
+    writeSquadronConfigFile(path, topComment, squadron, roles, onDisk, https, webPush);
   }
 
-  return { team, roles, store, https, webPush, migrated };
+  return { squadron, roles, store, https, webPush, migrated };
 }
 
 /** Shape persisted to disk for a single slot entry. */
 interface SlotOnDisk {
   callsign: string;
   role: string;
+  authority: Authority;
   tokenHash: string;
   totpSecret?: string | null;
   totpLastCounter?: number;
 }
 
 /**
- * Write a fresh config file containing the supplied team, roles, and
- * slots with their tokens hashed. Mode is 0o600. Used by the first-run
- * wizard and available for programmatic callers that want the same
- * on-disk format the server expects.
+ * Write a fresh config file containing the supplied squadron, roles,
+ * and slots with their tokens hashed. Mode is 0o600.
  */
-export function writeTeamConfig(
+export function writeSquadronConfig(
   path: string,
-  team: Team,
+  squadron: Squadron,
   roles: Record<string, Role>,
   slotsWithTokens: Array<{
     callsign: string;
     role: string;
+    authority?: Authority;
     token: string;
     totpSecret?: string | null;
     totpLastCounter?: number;
@@ -567,49 +478,46 @@ export function writeTeamConfig(
   const onDisk: SlotOnDisk[] = slotsWithTokens.map((s) => ({
     callsign: s.callsign,
     role: s.role,
+    authority: s.authority ?? 'operator',
     tokenHash: hashToken(s.token),
     totpSecret: s.totpSecret ?? null,
     totpLastCounter: s.totpLastCounter ?? 0,
   }));
-  writeTeamConfigFile(path, CONFIG_FILE_COMMENT, team, roles, onDisk, https, webPush);
+  writeSquadronConfigFile(path, CONFIG_FILE_COMMENT, squadron, roles, onDisk, https, webPush);
 }
 
 /**
  * Rewrite the config file with a fresh `webPush` block. Called by
- * `runServer` after auto-generating VAPID keys on first boot so the
- * new key material persists for subsequent restarts. Reloads the file
- * first so we don't trample concurrent edits to other blocks.
+ * `runServer` after auto-generating VAPID keys on first boot.
  */
 export function writeWebPushConfig(path: string, webPush: WebPushConfig): void {
   const raw = readFileSync(path, 'utf8');
-  const parsed = TeamConfigSchema.parse(JSON.parse(raw));
+  const parsed = SquadronConfigSchema.parse(JSON.parse(raw));
   const topComment = typeof parsed._comment === 'string' ? parsed._comment : CONFIG_FILE_COMMENT;
-  // Reconstruct the on-disk slot entries from the already-validated
-  // file contents — we only want to change the webPush block.
   const onDisk: SlotOnDisk[] = parsed.slots.map((s) => ({
     callsign: s.callsign,
     role: s.role,
+    authority: s.authority,
     tokenHash: s.tokenHash ?? hashToken(s.token as string),
     totpSecret: s.totpSecret ?? null,
     totpLastCounter: s.totpLastCounter ?? 0,
   }));
-  writeTeamConfigFile(path, topComment, parsed.team, parsed.roles, onDisk, parsed.https, webPush);
+  writeSquadronConfigFile(
+    path,
+    topComment,
+    parsed.squadron,
+    parsed.roles,
+    onDisk,
+    parsed.https,
+    webPush,
+  );
 }
 
 /**
  * Rewrite the config file at `path` with a new TOTP secret for
- * `callsign`. Used by the CLI `c17 enroll` command and by the wizard's
- * post-slot enrollment prompt. Pass `null` to drop an enrollment.
- * `totpLastCounter` is reset to 0 whenever the secret changes so a
- * freshly-enrolled device can accept the first code immediately.
- *
- * Atomic and mode-0600 via the same helper the main writer uses.
- * Throws `SlotLoadError` if the file is missing, corrupt, or doesn't
- * contain a slot with that callsign.
+ * `callsign`. Used by the CLI `c17 enroll` command and by the wizard.
  */
 export function enrollSlotTotp(path: string, callsign: string, totpSecret: string | null): void {
-  // Reload from disk so we never trample concurrent edits. The config
-  // file is small, this is cheap.
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
@@ -624,7 +532,7 @@ export function enrollSlotTotp(path: string, callsign: string, totpSecret: strin
   } catch (err) {
     throw new SlotLoadError(`config file at ${path} is not valid JSON: ${(err as Error).message}`);
   }
-  const result = TeamConfigSchema.safeParse(parsed);
+  const result = SquadronConfigSchema.safeParse(parsed);
   if (!result.success) {
     throw new SlotLoadError(`config file at ${path} is invalid — cannot enroll`);
   }
@@ -634,25 +542,21 @@ export function enrollSlotTotp(path: string, callsign: string, totpSecret: strin
   }
 
   const onDisk: SlotOnDisk[] = result.data.slots.map((s) => {
-    // Every entry needs a tokenHash on disk. If a slot still has a
-    // plaintext token at this point, hash it now — same migration
-    // behavior as loadTeamConfigFromFile. Schema guarantees exactly
-    // one of the two is present.
     const tokenHash = s.tokenHash ?? hashToken(s.token as string);
     if (s.callsign === callsign) {
       return {
         callsign: s.callsign,
         role: s.role,
+        authority: s.authority,
         tokenHash,
         totpSecret,
-        // Reset counter on re-enrollment so a freshly-scanned device
-        // can verify its first code without fighting a stale counter.
         totpLastCounter: 0,
       };
     }
     return {
       callsign: s.callsign,
       role: s.role,
+      authority: s.authority,
       tokenHash,
       totpSecret: s.totpSecret ?? null,
       totpLastCounter: s.totpLastCounter ?? 0,
@@ -661,10 +565,10 @@ export function enrollSlotTotp(path: string, callsign: string, totpSecret: strin
 
   const topComment =
     typeof result.data._comment === 'string' ? result.data._comment : CONFIG_FILE_COMMENT;
-  writeTeamConfigFile(
+  writeSquadronConfigFile(
     path,
     topComment,
-    result.data.team,
+    result.data.squadron,
     result.data.roles,
     onDisk,
     result.data.https,
@@ -672,25 +576,26 @@ export function enrollSlotTotp(path: string, callsign: string, totpSecret: strin
   );
 }
 
-function writeTeamConfigFile(
+function writeSquadronConfigFile(
   path: string,
   comment: string,
-  team: Team,
+  squadron: Squadron,
   roles: Record<string, Role>,
   slots: SlotOnDisk[],
   https?: HttpsConfig,
   webPush?: WebPushConfig | null,
 ): void {
-  // Emit null totpSecret as `null` only when the slot was previously
-  // enrolled and is being cleared; otherwise omit the field entirely
-  // so new config files stay tidy. `totpLastCounter` is omitted when
-  // zero for the same reason.
   const slotsForDisk = slots.map((s) => {
     const out: Record<string, unknown> = {
       callsign: s.callsign,
       role: s.role,
-      tokenHash: s.tokenHash,
     };
+    // Only emit `authority` when it differs from the default, to keep
+    // freshly-written configs tidy for plain-operator-only squadrons.
+    if (s.authority !== 'operator') {
+      out.authority = s.authority;
+    }
+    out.tokenHash = s.tokenHash;
     if (s.totpSecret !== undefined && s.totpSecret !== null) {
       out.totpSecret = s.totpSecret;
     }
@@ -699,12 +604,9 @@ function writeTeamConfigFile(
     }
     return out;
   });
-  // Only persist the `https` block if the caller passed one AND it
-  // differs from the all-defaults config. Keeps freshly-wizard-written
-  // files clean for users who don't care about HTTPS until later.
   const payload: Record<string, unknown> = {
     _comment: comment,
-    team,
+    squadron,
     roles,
     slots: slotsForDisk,
   };
@@ -723,15 +625,6 @@ function httpsConfigEqualsDefault(https: HttpsConfig): boolean {
   return JSON.stringify(https) === JSON.stringify(def);
 }
 
-/**
- * Write `body` to `path` atomically and with a restrictive mode set
- * before any bytes are written. Uses an exclusive temp file in the
- * same directory (so the rename is atomic on POSIX) and fsyncs before
- * the rename to survive a crash. No TOCTOU window: the temp is
- * created with `O_CREAT|O_WRONLY|O_EXCL` and mode `0o600`, so the
- * permission is set at creation time and the rename atomically swaps
- * it into place.
- */
 function atomicWriteRestricted(path: string, body: string): void {
   const dir = dirname(path);
   const nonce = randomBytes(6).toString('hex');
@@ -744,10 +637,6 @@ function atomicWriteRestricted(path: string, body: string): void {
     closeSync(fd);
     fd = null;
     renameSync(tmp, path);
-    // Best-effort re-chmod in case the destination already existed with
-    // a looser mode (rename preserves the source mode, but some FUSE
-    // filesystems and Windows emulation layers ignore the create-mode
-    // hint — this catches them).
     try {
       chmodSync(path, 0o600);
     } catch {
@@ -773,59 +662,59 @@ function atomicWriteRestricted(path: string, body: string): void {
 /**
  * Project the loaded slots into a teammate list suitable for the
  * briefing response. Preserves config ordering. Cached by store
- * identity — slots are immutable after boot, so the projection can
- * be built once per store and reused on every /briefing and /roster
- * request. The WeakMap lets the cache entry get collected when the
- * store is replaced (future config reload) without us managing
- * invalidation by hand.
+ * identity since slots are immutable after boot.
  */
 const teammateCache = new WeakMap<SlotStore, Teammate[]>();
 export function teammatesFromStore(store: SlotStore): Teammate[] {
   const cached = teammateCache.get(store);
   if (cached) return cached;
-  const teammates = store.slots().map((s) => ({ callsign: s.callsign, role: s.role }));
+  const teammates = store.slots().map((s) => ({
+    callsign: s.callsign,
+    role: s.role,
+    authority: s.authority,
+  }));
   teammateCache.set(store, teammates);
   return teammates;
 }
 
-/**
- * The comment block embedded at the top of generated config files.
- * Kept here (not a separate doc) so it always stays in sync with the
- * schema and with what the wizard produces.
- */
 export const CONFIG_FILE_COMMENT =
-  'control17 team config. Defines one team with a mission, roles, and slots. ' +
-  'Each slot has { callsign, role, tokenHash }. To rotate or add a slot by hand, ' +
-  'add { "callsign": "...", "role": "...", "token": "<plaintext>" } and the server ' +
-  'will hash it on next boot and rewrite this file. Roles are freeform and defined ' +
-  'in the top-level `roles` map. A role with `editor: true` grants its slots future ' +
-  'permission to edit the team/mission/roles at runtime.';
+  'control17 squadron config. Defines one squadron with a mission, roles, and slots. ' +
+  'Each slot has { callsign, role, authority, tokenHash }. `authority` is one of ' +
+  '`commander | lieutenant | operator`, defaulting to `operator` when omitted. ' +
+  'At least one commander is required. To rotate or add a slot by hand, add ' +
+  '{ "callsign": "...", "role": "...", "authority": "...", "token": "<plaintext>" } ' +
+  'and the server will hash the token on next boot and rewrite this file.';
 
-/**
- * Example config, used in error messages and as a reference document.
- */
 export function exampleConfig(): string {
   return `{
   "_comment": "${CONFIG_FILE_COMMENT}",
-  "team": {
-    "name": "squadron",
-    "mission": "Describe what the team is working toward.",
+  "squadron": {
+    "name": "alpha-squadron",
+    "mission": "Describe what the squadron is working toward.",
     "brief": "Longer narrative about scope, constraints, operating window."
   },
   "roles": {
     "operator": {
-      "description": "Directs the team, makes go/no-go calls, handles escalations.",
-      "instructions": "The operator role on this team directs activity in the team channel and handles escalations.",
-      "editor": true
+      "description": "Human directs the squadron, makes go/no-go calls, handles escalations.",
+      "instructions": "The operator role directs activity in the squadron channel and handles escalations."
     },
     "implementer": {
       "description": "Writes and ships code changes.",
-      "instructions": "The implementer role on this team writes and ships code, takes direction from the operator, and reports progress in the team channel."
+      "instructions": "The implementer role writes and ships code, takes direction from the commander, and reports progress."
+    },
+    "reviewer": {
+      "description": "Reviews implementer work before it ships.",
+      "instructions": "The reviewer role checks diffs and signs off on changes."
+    },
+    "watcher": {
+      "description": "Passively monitors squadron activity and flags anomalies.",
+      "instructions": "The watcher role observes squadron activity and surfaces issues."
     }
   },
   "slots": [
-    { "callsign": "ACTUAL",  "role": "operator",    "token": "c17_change_me_to_a_real_secret" },
-    { "callsign": "ALPHA-1", "role": "implementer", "token": "c17_change_me_to_another_real_secret" }
+    { "callsign": "ACTUAL",  "role": "operator",    "authority": "commander",  "token": "c17_change_me_to_a_real_secret" },
+    { "callsign": "LT-ONE",  "role": "operator",    "authority": "lieutenant", "token": "c17_change_me_to_another_real_secret" },
+    { "callsign": "ALPHA-1", "role": "implementer",                             "token": "c17_change_me_to_another_real_secret" }
   ]
 }`;
 }

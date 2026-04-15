@@ -8,11 +8,19 @@
 export type LogLevel = 'debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical';
 
 /**
- * A team is the top-level unit the server controls. One server = one
- * team (multi-team lives at the SaaS layer). The team defines the
- * mission and the context every slot inherits.
+ * Authority tier on a slot. Orthogonal to `role` (what you do vs. what
+ * you can change). Most slots are plain `operator`; `lieutenant` can
+ * create and assign objectives; `commander` can do everything including
+ * edit squadron config and roles.
  */
-export interface Team {
+export type Authority = 'commander' | 'lieutenant' | 'operator';
+
+/**
+ * A squadron is the top-level unit the server controls. One deployment
+ * = one squadron. The squadron defines the mission and the context every
+ * slot inherits. Multi-squadron lives at the SaaS layer.
+ */
+export interface Squadron {
   name: string;
   mission: string;
   brief: string;
@@ -23,20 +31,18 @@ export interface Team {
  * the server config and referenced by slots. Multiple slots can share
  * a role — e.g., two `implementer` slots running in parallel.
  *
- * `editor: true` grants the slot permission to edit the team/roles
- * via (future) runtime admin endpoints. Today the flag is plumbed
- * through `/briefing.canEdit` but no edit endpoints exist yet.
+ * Permission to edit squadron state comes from the slot's `authority`,
+ * not from the role.
  */
 export interface Role {
   description: string;
   instructions: string;
-  editor?: boolean;
 }
 
 /**
- * A reserved position on the team. The token is the auth boundary;
- * the callsign is the team-context identity; the role string is a
- * key into the team's roles map.
+ * A reserved position on the squadron. The token is the auth boundary;
+ * the callsign is the squadron-context identity; the role is a key into
+ * the squadron's roles map; the authority tier gates write access.
  *
  * On the wire, slots never carry their token — it's resolved by auth
  * and never returned in any response.
@@ -44,12 +50,14 @@ export interface Role {
 export interface Slot {
   callsign: string;
   role: string;
+  authority: Authority;
 }
 
 /** Projection of a slot for rendering in the roster / briefing. */
 export interface Teammate {
   callsign: string;
   role: string;
+  authority: Authority;
 }
 
 export interface Agent {
@@ -58,13 +66,8 @@ export interface Agent {
   connected: number;
   createdAt: number;
   lastSeen: number;
-  /**
-   * Role the occupying slot plays on the team. Cosmetic at the broker
-   * level — never gates auth or delivery, purely for display and
-   * dashboards. null for seeded-but-never-connected agents in some
-   * test paths.
-   */
   role: string | null;
+  authority: Authority;
 }
 
 export interface PushPayload {
@@ -92,9 +95,7 @@ export interface Message {
 }
 
 export interface DeliveryReport {
-  /** Number of subscribers that received the message over SSE. */
   sse: number;
-  /** Number of targeted agents resolved (0 if the target was unknown, N for broadcast). */
   targets: number;
 }
 
@@ -109,39 +110,33 @@ export interface HealthResponse {
 }
 
 /**
- * Full team-context packet returned from `GET /briefing`. Used by the
- * link and the TUI to initialize themselves with team/role/mission
- * context. The `instructions` string is pre-composed server-side and
- * passed verbatim into the MCP `Server({instructions})` init.
- *
- * This is the "on the net, you go by X and your role is Y" payload —
- * it complements the agent's base identity with team context, it
- * doesn't overwrite it.
+ * Full squadron-context packet returned from `GET /briefing`. Used by
+ * the link and the TUI to initialize themselves with squadron/role/
+ * mission/objectives context. The `instructions` string is pre-composed
+ * server-side and passed verbatim into the MCP `Server({instructions})`
+ * init.
  */
 export interface BriefingResponse {
   callsign: string;
   role: string;
-  team: Team;
+  authority: Authority;
+  squadron: Squadron;
   teammates: Teammate[];
+  /** Objectives currently assigned to this slot with status === 'active' or 'blocked'. */
+  openObjectives: Objective[];
   instructions: string;
-  canEdit: boolean;
 }
 
 /** Response from `GET /roster`. */
 export interface RosterResponse {
-  /** Every slot defined in the team config. */
   teammates: Teammate[];
-  /** Runtime connection state for slots currently registered with the broker. */
   connected: Agent[];
 }
 
 /** Query parameters for `GET /history`. */
 export interface HistoryQuery {
-  /** DM counterpart callsign — omit for full feed (broadcasts + DMs). */
   with?: string;
-  /** Max results (default 100, max 1000). */
   limit?: number;
-  /** Return only messages with `ts < before` (for pagination). */
   before?: number;
 }
 
@@ -150,43 +145,29 @@ export interface HistoryResponse {
 }
 
 /**
- * Request body for `POST /session/totp`. The SPA submits the slot's
- * callsign and a current 6-digit TOTP code; the server verifies and
- * issues a session cookie on success.
+ * Request body for `POST /session/totp`. The SPA submits a 6-digit
+ * code and the server iterates enrolled slots to find a match. The
+ * optional `slot` field is a legacy + CLI hint: when present, the
+ * server skips iteration and verifies against that specific slot
+ * only, preserving the targeted-login flow for automation that
+ * already knows which callsign is logging in.
  */
 export interface TotpLoginRequest {
-  slot: string;
   code: string;
+  slot?: string;
 }
 
-/**
- * Response body for `POST /session/totp` (on success) and `GET /session`.
- * Carries the authenticated slot's callsign and the session expiry
- * timestamp (ms since epoch) so the SPA can show "stay signed in for
- * N days" UI hints and redirect on expiry.
- */
 export interface SessionResponse {
   slot: string;
   role: string;
+  authority: Authority;
   expiresAt: number;
 }
 
-/**
- * VAPID public key advertisement — returned from
- * `GET /push/vapid-public-key`. The SPA passes this into
- * `pushManager.subscribe({applicationServerKey})` so the browser
- * signs its subscription to our key rather than hardcoding one at
- * build time.
- */
 export interface VapidPublicKeyResponse {
   publicKey: string;
 }
 
-/**
- * Push subscription payload the SPA POSTs after the browser hands
- * over a subscription. Matches the shape of a JSON-serialized
- * `PushSubscription`.
- */
 export interface PushSubscriptionPayload {
   endpoint: string;
   keys: {
@@ -195,9 +176,149 @@ export interface PushSubscriptionPayload {
   };
 }
 
-/** Response for a successful push-subscription registration. */
 export interface PushSubscriptionResponse {
   id: number;
   endpoint: string;
   createdAt: number;
+}
+
+// ───────────────────────── Objectives ─────────────────────────
+
+export type ObjectiveStatus = 'active' | 'blocked' | 'done' | 'cancelled';
+
+/**
+ * An objective is the apex task primitive on a squadron: push-assigned,
+ * outcome-required, single-assignee. The `outcome` field is the tangible
+ * definition of "done" that propagates into tool descriptions and channel
+ * pushes so the agent always has the acceptance criteria in front of them.
+ */
+export interface Objective {
+  id: string;
+  title: string;
+  /** Optional longer context. */
+  body: string;
+  /** Required — the tangible outcome that defines "done". */
+  outcome: string;
+  status: ObjectiveStatus;
+  assignee: string;
+  originator: string;
+  /**
+   * Additional callsigns that have been explicitly added to the
+   * objective's discussion thread by the commander or originator.
+   * Watchers receive every lifecycle event and every discussion post
+   * on their SSE streams without being the assignee. Use this for
+   * "keep me in the loop" awareness — reviewers tracking a feature,
+   * ops watching a blocker, a subject-matter expert who may be asked
+   * to weigh in. Commanders are implicit members regardless and do
+   * NOT appear in this list; only explicit non-commander watchers.
+   */
+  watchers: string[];
+  createdAt: number;
+  updatedAt: number;
+  /** Set iff status === 'done'. */
+  completedAt: number | null;
+  /** Required on completion; explains what was delivered. */
+  result: string | null;
+  /** Set while status === 'blocked'; cleared on unblock. */
+  blockReason: string | null;
+}
+
+/**
+ * Events on an objective's audit log. Kinds split into two groups:
+ *
+ *   Lifecycle transitions (the state machine of the work):
+ *     assigned | blocked | unblocked | completed | cancelled | reassigned
+ *
+ *   Membership changes (the audience of the thread):
+ *     watcher_added | watcher_removed
+ *
+ * Discussion — ordinary conversation about the objective — lives in
+ * the `obj:<id>` thread as regular messages and is NOT in the event
+ * log. The event log is strictly auditable transitions.
+ */
+export type ObjectiveEventKind =
+  | 'assigned'
+  | 'blocked'
+  | 'unblocked'
+  | 'completed'
+  | 'cancelled'
+  | 'reassigned'
+  | 'watcher_added'
+  | 'watcher_removed';
+
+export interface ObjectiveEvent {
+  objectiveId: string;
+  ts: number;
+  actor: string;
+  kind: ObjectiveEventKind;
+  payload: Record<string, unknown>;
+}
+
+export interface CreateObjectiveRequest {
+  title: string;
+  outcome: string;
+  body?: string;
+  assignee: string;
+  /**
+   * Optional initial watchers (callsigns that should be looped into
+   * the objective's thread from the start). Duplicates and the
+   * objective's own assignee/originator are de-duped server-side.
+   * Every callsign must resolve to a known squadron slot.
+   */
+  watchers?: string[];
+}
+
+/**
+ * Add or remove watchers on an existing objective. Either field may
+ * be omitted; both may be present for a combined add + remove.
+ * Callsigns that are already watchers are no-ops on `add`, and
+ * callsigns that aren't currently watchers are no-ops on `remove`.
+ * Every callsign in both lists must resolve to a known squadron slot.
+ */
+export interface UpdateWatchersRequest {
+  add?: string[];
+  remove?: string[];
+}
+
+export interface UpdateObjectiveRequest {
+  status?: 'active' | 'blocked';
+  blockReason?: string;
+}
+
+export interface CompleteObjectiveRequest {
+  result: string;
+}
+
+export interface CancelObjectiveRequest {
+  reason?: string;
+}
+
+export interface ReassignObjectiveRequest {
+  to: string;
+  note?: string;
+}
+
+/**
+ * Post a discussion message into an objective's thread. Members of the
+ * thread (originator, assignee, commanders) all receive it via their
+ * SSE streams. The post is a normal squadron `Message` with thread
+ * key `obj:<id>`, not an event-log entry.
+ */
+export interface DiscussObjectiveRequest {
+  body: string;
+  title?: string;
+}
+
+export interface ListObjectivesResponse {
+  objectives: Objective[];
+}
+
+export interface GetObjectiveResponse {
+  objective: Objective;
+  events: ObjectiveEvent[];
+}
+
+export interface ListObjectivesQuery {
+  assignee?: string;
+  status?: ObjectiveStatus;
 }

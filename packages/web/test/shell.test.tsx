@@ -61,6 +61,7 @@ beforeEach(() => {
     status: 'authenticated',
     slot: 'ACTUAL',
     role: 'operator',
+    authority: 'commander',
     expiresAt: 9_999_999_999_999,
   };
   __resetMessagesForTests();
@@ -147,9 +148,9 @@ describe('<Sidebar />', () => {
   function setRoster(connected: Record<string, number> = {}) {
     roster.value = {
       teammates: [
-        { callsign: 'ACTUAL', role: 'operator' },
-        { callsign: 'build-bot', role: 'implementer' },
-        { callsign: 'test-agent-1', role: 'watcher' },
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+        { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
+        { callsign: 'test-agent-1', role: 'watcher', authority: 'operator' },
       ],
       connected: Object.entries(connected).map(([agentId, count]) => ({
         agentId,
@@ -157,6 +158,7 @@ describe('<Sidebar />', () => {
         createdAt: 0,
         lastSeen: 0,
         role: null,
+        authority: 'operator' as const,
       })),
     };
   }
@@ -236,13 +238,14 @@ describe('<Sidebar />', () => {
     briefing.value = {
       callsign: 'ACTUAL',
       role: 'operator',
-      team: { name: 'alpha', mission: 'ship', brief: '' },
+      authority: 'commander',
+      squadron: { name: 'alpha', mission: 'ship', brief: '' },
       teammates: [
-        { callsign: 'ACTUAL', role: 'operator' },
-        { callsign: 'build-bot', role: 'implementer' },
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+        { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
       ],
+      openObjectives: [],
       instructions: '',
-      canEdit: true,
     };
     // roster.value stays null from beforeEach reset.
     render(<Sidebar viewer="ACTUAL" />);
@@ -333,8 +336,8 @@ describe('<RosterPanel />', () => {
   it('marks teammates as online when connected count > 0', async () => {
     roster.value = {
       teammates: [
-        { callsign: 'ACTUAL', role: 'operator' },
-        { callsign: 'build-bot', role: 'implementer' },
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+        { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
       ],
       connected: [
         {
@@ -343,6 +346,7 @@ describe('<RosterPanel />', () => {
           createdAt: 0,
           lastSeen: 0,
           role: 'implementer',
+          authority: 'operator',
         },
       ],
     };
@@ -356,8 +360,8 @@ describe('<RosterPanel />', () => {
   it('clicking a teammate opens a DM thread via currentView', async () => {
     roster.value = {
       teammates: [
-        { callsign: 'ACTUAL', role: 'operator' },
-        { callsign: 'build-bot', role: 'implementer' },
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+        { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
       ],
       connected: [],
     };
@@ -372,8 +376,8 @@ describe('<RosterPanel />', () => {
   it('self-row is NOT clickable (no DM-yourself button)', () => {
     roster.value = {
       teammates: [
-        { callsign: 'ACTUAL', role: 'operator' },
-        { callsign: 'build-bot', role: 'implementer' },
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+        { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
       ],
       connected: [],
     };
@@ -406,14 +410,17 @@ describe('briefing bootstrap', () => {
     briefing.value = {
       callsign: 'ACTUAL',
       role: 'operator',
-      team: { name: 'alpha-squadron', mission: 'ship', brief: '' },
-      teammates: [{ callsign: 'ACTUAL', role: 'operator' }],
+      authority: 'commander',
+      squadron: { name: 'alpha-squadron', mission: 'ship', brief: '' },
+      teammates: [{ callsign: 'ACTUAL', role: 'operator', authority: 'commander' }],
+      openObjectives: [],
       instructions: '',
-      canEdit: true,
     };
     render(<Header />);
     expect(screen.getByText('ACTUAL')).toBeTruthy();
-    expect(screen.getByText('operator')).toBeTruthy();
+    // Header now surfaces rank (authority) next to the callsign —
+    // commander was stamped on the session in beforeEach.
+    expect(screen.getByText('commander')).toBeTruthy();
     expect(screen.getByText(/alpha-squadron/)).toBeTruthy();
   });
 });
@@ -445,14 +452,15 @@ describe('<Sidebar /> overview button', () => {
     briefing.value = {
       callsign: 'ACTUAL',
       role: 'operator',
-      team: {
+      authority: 'commander',
+      squadron: {
         name: 'alpha-squadron',
         mission: 'Ship the payment service.',
         brief: '',
       },
-      teammates: [{ callsign: 'ACTUAL', role: 'operator' }],
+      teammates: [{ callsign: 'ACTUAL', role: 'operator', authority: 'commander' }],
+      openObjectives: [],
       instructions: '',
-      canEdit: true,
     };
     render(<Sidebar viewer="ACTUAL" />);
     // Sidebar should not leak team name or mission into its chrome.
@@ -466,17 +474,18 @@ describe('<RosterPanel /> mission header', () => {
     briefing.value = {
       callsign: 'ACTUAL',
       role: 'operator',
-      team: {
+      authority: 'commander',
+      squadron: {
         name: 'alpha-squadron',
         mission: 'Ship the payment service.',
         brief: 'Longer context about the operating window.',
       },
-      teammates: [{ callsign: 'ACTUAL', role: 'operator' }],
+      teammates: [{ callsign: 'ACTUAL', role: 'operator', authority: 'commander' }],
+      openObjectives: [],
       instructions: '',
-      canEdit: true,
     };
     roster.value = {
-      teammates: [{ callsign: 'ACTUAL', role: 'operator' }],
+      teammates: [{ callsign: 'ACTUAL', role: 'operator', authority: 'commander' }],
       connected: [],
     };
     render(<RosterPanel viewer="ACTUAL" />);
@@ -487,7 +496,7 @@ describe('<RosterPanel /> mission header', () => {
 
   it('omits the mission header when briefing is null', () => {
     roster.value = {
-      teammates: [{ callsign: 'ACTUAL', role: 'operator' }],
+      teammates: [{ callsign: 'ACTUAL', role: 'operator', authority: 'commander' }],
       connected: [],
     };
     render(<RosterPanel viewer="ACTUAL" />);

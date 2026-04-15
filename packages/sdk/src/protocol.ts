@@ -23,6 +23,20 @@ export const PATHS = {
   // Web Push (browser) — VAPID public key + per-device subscriptions.
   pushVapidPublicKey: '/push/vapid-public-key',
   pushSubscriptions: '/push/subscriptions',
+  // Objectives — Commander/Lieutenant create & assign, assignees execute.
+  objectives: '/objectives',
+  // The helpers below compose `:id` paths at runtime rather than
+  // templating here, since `PATHS` is keyed by identifier not URL.
+} as const;
+
+/** Path builders for objective subresources (the `:id` segment varies). */
+export const OBJECTIVE_PATHS = {
+  one: (id: string) => `/objectives/${encodeURIComponent(id)}`,
+  complete: (id: string) => `/objectives/${encodeURIComponent(id)}/complete`,
+  cancel: (id: string) => `/objectives/${encodeURIComponent(id)}/cancel`,
+  reassign: (id: string) => `/objectives/${encodeURIComponent(id)}/reassign`,
+  discuss: (id: string) => `/objectives/${encodeURIComponent(id)}/discuss`,
+  watchers: (id: string) => `/objectives/${encodeURIComponent(id)}/watchers`,
 } as const;
 
 export const DEFAULT_PORT = 8717 as const;

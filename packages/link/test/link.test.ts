@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   FAKE_BROKER_CALLSIGN,
   FAKE_BROKER_MISSION,
-  FAKE_BROKER_TEAM_NAME,
+  FAKE_BROKER_SQUADRON_NAME,
   FAKE_BROKER_TOKEN,
   type FakeBroker,
   startFakeBroker,
@@ -131,18 +131,46 @@ describe('link binary (spawned subprocess)', () => {
       tools: Array<{ name: string; description: string }>;
     };
     const names = result.tools.map((t) => t.name).sort();
-    expect(names).toEqual(['broadcast', 'recent', 'roster', 'send']);
+    // Commander authority (see fake-broker.ts) unlocks the full
+    // tool surface: 4 chat tools + 4 base objective verbs + 4
+    // authority-gated verbs (create / cancel / watchers / reassign).
+    expect(names).toEqual([
+      'broadcast',
+      'objectives_cancel',
+      'objectives_complete',
+      'objectives_create',
+      'objectives_discuss',
+      'objectives_list',
+      'objectives_reassign',
+      'objectives_update',
+      'objectives_view',
+      'objectives_watchers',
+      'recent',
+      'roster',
+      'send',
+    ]);
 
-    // Every tool description should carry some team context.
+    // Chat tools all carry explicit squadron context in their
+    // descriptions. Objective tools are scoped to the caller's own
+    // plate and don't need the squadron name baked in — their context
+    // comes from the sticky "openObjectives" snapshot the link rebuilds
+    // on every refresh.
+    const chatToolNames = new Set(['roster', 'broadcast', 'send', 'recent']);
     for (const tool of result.tools) {
-      expect(tool.description).toContain(FAKE_BROKER_TEAM_NAME);
+      if (chatToolNames.has(tool.name)) {
+        expect(tool.description).toContain(FAKE_BROKER_SQUADRON_NAME);
+      }
     }
-    // The broadcast tool should name the team channel.
     const broadcast = result.tools.find((t) => t.name === 'broadcast');
     expect(broadcast?.description).toContain(FAKE_BROKER_CALLSIGN);
-    // The roster tool should carry the mission.
     const roster = result.tools.find((t) => t.name === 'roster');
     expect(roster?.description).toContain(FAKE_BROKER_MISSION);
+
+    // Objective tools should exist and carry appropriate guidance.
+    const listTool = result.tools.find((t) => t.name === 'objectives_list');
+    expect(listTool?.description).toContain('assigned to you');
+    const completeTool = result.tools.find((t) => t.name === 'objectives_complete');
+    expect(completeTool?.description).toContain('acceptance');
   });
 
   it('send tool issues POST /push to the broker', async () => {
@@ -286,6 +314,7 @@ describe('link binary (spawned subprocess)', () => {
         target: 'SPOOFED-TARGET',
         msg_id: 'SPOOFED-ID',
         ts: '0',
+        ts_ms: '0',
         // Non-reserved keys should still flow through.
         legit_field: 'ok',
       },
@@ -302,7 +331,13 @@ describe('link binary (spawned subprocess)', () => {
     expect(params.meta.title).toBe('genuine title');
     expect(params.meta.target).toBe(AGENT_ID);
     expect(params.meta.msg_id).toBe('msg-spoof');
-    expect(params.meta.ts).toBe('1700000002000');
+    // `ts` is now the human-readable form; `ts_ms` preserves the
+    // raw unix-ms value for downstream arithmetic. Both are
+    // authoritative — the spoofed `ts: '0'` and `ts_ms: '0'` must
+    // not leak through.
+    expect(params.meta.ts).toMatch(/^\d{2}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} UTC$/);
+    expect(params.meta.ts).not.toBe('0');
+    expect(params.meta.ts_ms).toBe('1700000002000');
     // Non-reserved data passes through:
     expect(params.meta.legit_field).toBe('ok');
   });

@@ -2,8 +2,8 @@
  * `@control17/server` — CLI entry for the self-hosted broker.
  *
  * Thin wrapper around `runServer()` that reads config from env/argv,
- * loads the team config file (or drops into the first-run wizard if
- * the file is missing and stdin is a TTY), wires shutdown handlers,
+ * loads the squadron config file (or drops into the first-run wizard
+ * if the file is missing and stdin is a TTY), wires shutdown handlers,
  * and prints a startup banner. Import `runServer` directly if you
  * want to embed the broker in another Node process.
  */
@@ -19,9 +19,9 @@ import {
   defaultConfigPath,
   exampleConfig,
   type HttpsConfig,
-  loadTeamConfigFromFile,
+  loadSquadronConfigFromFile,
   SlotLoadError,
-  type TeamConfig,
+  type SquadronConfig,
 } from './slots.js';
 import { createTtyWizardIO, runFirstRunWizard } from './wizard.js';
 
@@ -31,7 +31,7 @@ usage:
   control17-server [--config-path <path>]
 
 options:
-  --config-path <path>   path to the team config file
+  --config-path <path>   path to the squadron config file
                          (default: ./control17.json, or $C17_CONFIG_PATH)
   -h, --help             print this message and exit
 
@@ -73,9 +73,9 @@ function parseServerArgs(argv: string[]): { configPath?: string; help: boolean }
   }
 }
 
-async function loadOrCreateTeamConfig(configPath: string): Promise<TeamConfig> {
+async function loadOrCreateSquadronConfig(configPath: string): Promise<SquadronConfig> {
   try {
-    const config = loadTeamConfigFromFile(configPath);
+    const config = loadSquadronConfigFromFile(configPath);
     if (config.migrated > 0) {
       process.stdout.write(
         `control17-server: hashed ${config.migrated} plaintext token(s) in ${configPath}\n`,
@@ -94,7 +94,7 @@ async function loadOrCreateTeamConfig(configPath: string): Promise<TeamConfig> {
   }
 }
 
-async function runWizardOrFail(configPath: string): Promise<TeamConfig> {
+async function runWizardOrFail(configPath: string): Promise<SquadronConfig> {
   const { io, close } = createTtyWizardIO();
   if (!io.isInteractive) {
     close();
@@ -165,10 +165,10 @@ async function main(): Promise<void> {
 
   const {
     store: slots,
-    team,
+    squadron,
     roles,
     https: httpsFromConfig,
-  } = await loadOrCreateTeamConfig(configPath);
+  } = await loadOrCreateSquadronConfig(configPath);
 
   // Auto-flip: if the user didn't explicitly configure HTTPS in the
   // config file AND is binding to a non-loopback interface, switch
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
 
   const running = await runServer({
     slots,
-    team,
+    squadron,
     roles,
     https,
     configDir: dirname(configPath),
@@ -215,11 +215,11 @@ async function main(): Promise<void> {
         }
       }
       lines.push(
-        `  team:    ${team.name}`,
-        `  mission: ${team.mission}`,
-        `  config:  ${configPath}`,
-        `  db:      ${dbPath}`,
-        `  slots:   ${slots.size()} (${slots.callsigns().join(', ')})`,
+        `  squadron: ${squadron.name}`,
+        `  mission:  ${squadron.mission}`,
+        `  config:   ${configPath}`,
+        `  db:       ${dbPath}`,
+        `  slots:    ${slots.size()} (${slots.callsigns().join(', ')})`,
       );
       process.stdout.write(`${lines.join('\n')}\n`);
     },

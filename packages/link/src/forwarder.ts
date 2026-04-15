@@ -11,6 +11,7 @@ import type { Client as BrokerClient } from '@control17/sdk/client';
 import { MCP_CHANNEL_NOTIFICATION } from '@control17/sdk/protocol';
 import type { Message } from '@control17/sdk/types';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { formatAgentTimestamp } from './tools.js';
 
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
@@ -23,10 +24,21 @@ export interface ForwarderOptions {
   callsign: string;
   signal: AbortSignal;
   log: (msg: string, ctx?: Record<string, unknown>) => void;
+  /**
+   * Invoked for every message the forwarder observes whose `data.kind`
+   * is `'objective'`. The tracker uses this to refresh the link's
+   * cached open-objectives set and emit `tools/list_changed`. Fires
+   * for both self-originated and inbound events — even though the
+   * self-echo suppression below drops self-originated objective
+   * messages from the channel forward, the tracker still wants to
+   * know about them so the tool descriptions refresh after the agent
+   * acts on its own objective.
+   */
+  onObjectiveEvent?: (message: Message) => void;
 }
 
 export async function runForwarder(opts: ForwarderOptions): Promise<void> {
-  const { server, brokerClient, callsign, signal, log } = opts;
+  const { server, brokerClient, callsign, signal, log, onObjectiveEvent } = opts;
   let backoff = BACKOFF_START_MS;
 
   while (!signal.aborted) {
@@ -35,15 +47,29 @@ export async function runForwarder(opts: ForwarderOptions): Promise<void> {
       backoff = BACKOFF_START_MS;
 
       for await (const message of brokerClient.subscribe(callsign, signal)) {
-        // Self-echo suppression: the broker fans out every push to all
-        // subscribers INCLUDING the sender, so our own sends come back
-        // on the SSE stream. Forwarding those to the MCP client would
+        const isObjectiveEvent =
+          typeof message.data === 'object' &&
+          message.data !== null &&
+          (message.data as Record<string, unknown>).kind === 'objective';
+
+        // Objectives tracker observes every objective event — including
+        // ones where the agent itself was the actor — so tool
+        // descriptions refresh after a self-initiated update.
+        if (isObjectiveEvent && onObjectiveEvent) {
+          try {
+            onObjectiveEvent(message);
+          } catch (err) {
+            log('onObjectiveEvent handler threw', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        // Self-echo suppression (chat plane): the broker fans out every
+        // push to all subscribers INCLUDING the sender, so our own
+        // sends come back on the SSE stream. Forwarding them would
         // cost the agent a turn to recognise and discard its own
-        // output. Filter them here instead — the agent should never
-        // see its own broadcast/send as an incoming channel event.
-        // `recent` (history) still returns self-sends, which is the
-        // right behaviour: scrollback is supposed to include what you
-        // said. Only the live stream is filtered.
+        // output. `recent` still returns self-sends for scrollback.
         if (message.from === callsign) continue;
         await forwardMessage(server, message, log);
       }
@@ -75,6 +101,7 @@ const RESERVED_META_KEYS: ReadonlySet<string> = new Set([
   'msg_id',
   'level',
   'ts',
+  'ts_ms',
   'thread',
   'from',
   'title',
@@ -87,10 +114,17 @@ async function forwardMessage(
   log: (msg: string, ctx?: Record<string, unknown>) => void,
 ): Promise<void> {
   const thread: ThreadType = message.agentId === null ? 'primary' : 'dm';
+  // `ts` is formatted for agent consumption — a fixed-width human
+  // datetime like `04/15/26 14:23:45 UTC`. Parseable, unambiguous
+  // about timezone, precise to the second, and doesn't require the
+  // agent to run a tool to interpret raw unix milliseconds. A
+  // separate `ts_ms` preserves the machine-readable value for
+  // anything downstream that wants to do arithmetic on it.
   const meta: Record<string, string> = {
     msg_id: message.id,
     level: message.level,
-    ts: String(message.ts),
+    ts: formatAgentTimestamp(message.ts),
+    ts_ms: String(message.ts),
     thread,
   };
   if (message.from) meta.from = message.from;

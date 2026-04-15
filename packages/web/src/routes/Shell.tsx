@@ -26,12 +26,16 @@ import { effect } from '@preact/signals';
 import { useEffect } from 'preact/hooks';
 import { Composer } from '../components/Composer.js';
 import { Header } from '../components/Header.js';
+import { ObjectiveCreate } from '../components/ObjectiveCreate.js';
+import { ObjectiveDetail } from '../components/ObjectiveDetail.js';
+import { ObjectivesPanel } from '../components/ObjectivesPanel.js';
 import { RosterPanel } from '../components/RosterPanel.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Transcript } from '../components/Transcript.js';
 import { loadBriefing } from '../lib/briefing.js';
 import { getClient } from '../lib/client.js';
 import { appendMessages, messagesByThread } from '../lib/messages.js';
+import { loadObjectives } from '../lib/objectives.js';
 import { initializePushState } from '../lib/push.js';
 import { loadRoster, startRosterPolling } from '../lib/roster.js';
 import { logout, session } from '../lib/session.js';
@@ -85,6 +89,16 @@ export function Shell() {
           return;
         }
         console.error('roster failed', err);
+      }
+      try {
+        await loadObjectives();
+      } catch (err) {
+        if (isUnauthorized(err)) {
+          void logout();
+          return;
+        }
+        // Non-fatal — the objectives panel will retry on mount.
+        console.error('objectives failed', err);
       }
       disposeRoster = startRosterPolling();
       disposeSubscribe = startSubscribe({
@@ -159,19 +173,35 @@ export function Shell() {
       <Header />
       <div class="flex flex-1 min-h-0">
         <Sidebar viewer={s.slot} />
-        <section class="flex-1 flex flex-col min-w-0">
-          {view.kind === 'thread' ? (
-            <>
-              <Transcript viewer={s.slot} />
-              <Composer viewer={s.slot} />
-            </>
-          ) : (
-            <RosterPanel viewer={s.slot} />
-          )}
-        </section>
+        <section class="flex-1 flex flex-col min-w-0">{renderView(view, s.slot)}</section>
       </div>
     </main>
   );
+}
+
+/**
+ * Route the current view kind to the right panel. Thread views wrap
+ * Transcript + Composer; everything else renders a standalone panel
+ * in the same flex region.
+ */
+function renderView(view: ReturnType<(typeof currentView)['peek']>, viewer: string) {
+  switch (view.kind) {
+    case 'thread':
+      return (
+        <>
+          <Transcript viewer={viewer} />
+          <Composer viewer={viewer} />
+        </>
+      );
+    case 'overview':
+      return <RosterPanel viewer={viewer} />;
+    case 'objectives-list':
+      return <ObjectivesPanel viewer={viewer} />;
+    case 'objective-detail':
+      return <ObjectiveDetail id={view.id} viewer={viewer} />;
+    case 'objective-create':
+      return <ObjectiveCreate />;
+  }
 }
 
 /** Narrow error to 401 — the SDK throws `ClientError` with `.status`. */

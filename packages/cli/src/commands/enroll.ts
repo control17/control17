@@ -67,9 +67,9 @@ export async function runEnrollCommand(
   // Load the existing config. Any failure here (missing, invalid)
   // gets mapped to a user-facing UsageError so the raw SlotLoadError
   // stack doesn't surface.
-  let config: Awaited<ReturnType<typeof server.loadTeamConfigFromFile>>;
+  let config: Awaited<ReturnType<typeof server.loadSquadronConfigFromFile>>;
   try {
-    config = server.loadTeamConfigFromFile(configPath);
+    config = server.loadSquadronConfigFromFile(configPath);
   } catch (err) {
     if (err instanceof server.ConfigNotFoundError) {
       throw new UsageError(

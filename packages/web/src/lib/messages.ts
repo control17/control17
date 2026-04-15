@@ -1,15 +1,23 @@
 /**
  * Messages signal — transcript state keyed by thread.
  *
- * A "thread" is either the shared team channel (`primary`) or a DM
- * conversation (`dm:<other>`). `threadKeyOf` maps a Message to its
- * thread key from the perspective of the current viewer. The signal
- * value is a `Map<threadKey, Message[]>` — we store the Map itself so
- * reads stay O(1) and we can still replace it on change to trigger
- * signal reactivity.
+ * A "thread" is:
+ *   - the shared squadron channel (`primary`)
+ *   - a DM conversation (`dm:<other>`)
+ *   - an objective's discussion thread (`obj:<id>`)
  *
- * Append dedupes by message id — important because SSE reconnects
- * re-pull /history and we don't want duplicates when reconciling.
+ * `threadKeyOf` maps a Message to its thread key from the perspective
+ * of the current viewer. When the sender tags a message with an
+ * explicit thread key in `data.thread`, that wins — this is how
+ * objective discussions and objective lifecycle events route into
+ * their dedicated thread. Otherwise we fall back to the legacy
+ * primary/DM derivation based on `agentId` + `from`.
+ *
+ * The signal value is a `Map<threadKey, Message[]>` — we store the Map
+ * itself so reads stay O(1) and we can still replace it on change to
+ * trigger signal reactivity. Append dedupes by message id — important
+ * because SSE reconnects re-pull /history and we don't want duplicates
+ * when reconciling.
  */
 
 import type { Message } from '@control17/sdk/types';
@@ -17,6 +25,7 @@ import { signal } from '@preact/signals';
 
 export const PRIMARY_THREAD = 'primary';
 export const DM_PREFIX = 'dm:';
+export const OBJ_PREFIX = 'obj:';
 
 /**
  * Build a DM thread key from the counterpart callsign. Centralized
@@ -33,6 +42,16 @@ export function isDmThread(key: string): boolean {
   return key.startsWith(DM_PREFIX);
 }
 
+/** Build an objective thread key from an objective id. */
+export function objectiveThreadKey(id: string): string {
+  return `${OBJ_PREFIX}${id}`;
+}
+
+/** True if `key` names an objective discussion thread. */
+export function isObjectiveThread(key: string): boolean {
+  return key.startsWith(OBJ_PREFIX);
+}
+
 /**
  * Extract the counterpart callsign from a DM thread key. Returns
  * `null` for `PRIMARY_THREAD` or any non-DM key so callers can
@@ -45,6 +64,13 @@ export function dmOther(key: string): string | null {
 
 /** Thread key for `msg` from the perspective of the viewer `self`. */
 export function threadKeyOf(msg: Message, self: string): string {
+  // Explicit thread override wins. Objective lifecycle events and
+  // discussion posts both ship with `data.thread = 'obj:<id>'` so
+  // they route straight into the objective's dedicated thread,
+  // bypassing the primary/DM heuristics below.
+  const explicit = typeof msg.data?.thread === 'string' ? (msg.data.thread as string) : null;
+  if (explicit !== null && explicit.length > 0) return explicit;
+
   if (msg.agentId === null) return PRIMARY_THREAD;
   if (msg.agentId === self) {
     // DM addressed to me — thread is keyed by the other party's

@@ -37,6 +37,7 @@ const PROXIED_PATHS = [
   '/subscribe',
   '/history',
   '/session',
+  '/objectives',
 ];
 
 export default defineConfig({

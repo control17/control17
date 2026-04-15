@@ -2,16 +2,16 @@
  * Session signal — the SPA's single source of truth for "who am I."
  *
  * Three states:
- *   - `loading`       — initial mount, haven't asked the server yet
- *   - `anonymous`     — confirmed no valid session; show login
- *   - `{slot, role}`  — authenticated; show the shell
+ *   - `loading`                          — initial mount, haven't asked the server yet
+ *   - `anonymous`                        — confirmed no valid session; show login
+ *   - `{slot, role, authority, …}`       — authenticated; show the shell
  *
  * Components read the signal via Preact's `.value`; writes always go
  * through `bootstrap`, `loginWithTotp`, or `logout` so the state
  * transitions stay auditable in one place.
  */
 
-import type { SessionResponse } from '@control17/sdk/types';
+import type { Authority, SessionResponse } from '@control17/sdk/types';
 import { signal } from '@preact/signals';
 import { getClient } from './client.js';
 
@@ -22,6 +22,7 @@ export type SessionState =
       status: 'authenticated';
       slot: string;
       role: string;
+      authority: Authority;
       expiresAt: number;
     };
 
@@ -50,13 +51,15 @@ export async function bootstrap(): Promise<void> {
 }
 
 /**
- * Submit a TOTP login. On success the server sets the session cookie
+ * Submit a TOTP login. The SPA uses the codeless flow — only the
+ * 6-digit code is submitted and the server iterates enrolled slots
+ * to find a match. On success the server sets the session cookie
  * and we update the signal to authenticated. On failure we throw
  * `LoginError` so the Login component can render a user-facing message.
  */
-export async function loginWithTotp(slot: string, code: string): Promise<void> {
+export async function loginWithTotp(code: string): Promise<void> {
   try {
-    const result = await getClient().loginWithTotp({ slot, code });
+    const result = await getClient().loginWithTotp({ code });
     session.value = authenticatedFrom(result);
   } catch (err) {
     throw new LoginError(err instanceof Error && err.message ? err.message : 'login failed');
@@ -91,6 +94,11 @@ function authenticatedFrom(resp: SessionResponse): SessionState {
     status: 'authenticated',
     slot: resp.slot,
     role: resp.role,
+    // Server always stamps an authority on the session response, but
+    // defend against an older server (or a malformed response) by
+    // falling back to the base tier — losing commander/lieutenant
+    // capabilities is safer than granting them implicitly.
+    authority: resp.authority ?? 'operator',
     expiresAt: resp.expiresAt,
   };
 }

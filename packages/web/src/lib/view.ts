@@ -17,7 +17,12 @@
 import { signal } from '@preact/signals';
 import { dmThreadKey, PRIMARY_THREAD } from './messages.js';
 
-export type View = { kind: 'thread'; key: string } | { kind: 'overview' };
+export type View =
+  | { kind: 'thread'; key: string }
+  | { kind: 'overview' }
+  | { kind: 'objectives-list' }
+  | { kind: 'objective-detail'; id: string }
+  | { kind: 'objective-create' };
 
 export const currentView = signal<View>({ kind: 'thread', key: PRIMARY_THREAD });
 
@@ -58,6 +63,21 @@ export function selectDmWith(callsign: string): void {
 
 export function selectOverview(): void {
   currentView.value = { kind: 'overview' };
+  isSidebarOpen.value = false;
+}
+
+export function selectObjectivesList(): void {
+  currentView.value = { kind: 'objectives-list' };
+  isSidebarOpen.value = false;
+}
+
+export function selectObjectiveDetail(id: string): void {
+  currentView.value = { kind: 'objective-detail', id };
+  isSidebarOpen.value = false;
+}
+
+export function selectObjectiveCreate(): void {
+  currentView.value = { kind: 'objective-create' };
   isSidebarOpen.value = false;
 }
 

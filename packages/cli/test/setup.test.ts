@@ -33,23 +33,28 @@ function tmpPath(): string {
 }
 
 const VALID_CONFIG_JSON = JSON.stringify({
-  team: {
+  squadron: {
     name: 'alpha-squadron',
     mission: 'ship the payment service',
     brief: '',
   },
   roles: {
-    operator: { description: '', instructions: '', editor: true },
+    operator: { description: '', instructions: '' },
     implementer: { description: '', instructions: '' },
   },
   slots: [
-    { callsign: 'ACTUAL', role: 'operator', tokenHash: `sha256:${'a'.repeat(64)}` },
+    {
+      callsign: 'ACTUAL',
+      role: 'operator',
+      authority: 'commander',
+      tokenHash: `sha256:${'a'.repeat(64)}`,
+    },
     { callsign: 'ALPHA-1', role: 'implementer', tokenHash: `sha256:${'b'.repeat(64)}` },
   ],
 });
 
 describe('runSetupCommand', () => {
-  it('refuses to overwrite an existing config and reports the current team/slots', async () => {
+  it('refuses to overwrite an existing config and reports the current squadron/slots', async () => {
     const configPath = tmpPath();
     writeFileSync(configPath, VALID_CONFIG_JSON);
 

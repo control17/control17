@@ -22,7 +22,7 @@ import { createServer as createHttpServer, type Server as HttpServer } from 'nod
 import { dirname, resolve as pathResolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Broker } from '@control17/core';
-import type { Role, Team } from '@control17/sdk/types';
+import type { Role, Squadron } from '@control17/sdk/types';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { type DatabaseSyncInstance, openDatabase } from './db.js';
@@ -34,6 +34,7 @@ import {
   loadOrGenerateSelfSigned,
 } from './https/store.js';
 import { logger as defaultLogger, type Logger } from './logger.js';
+import { createSqliteObjectivesStore } from './objectives.js';
 import { dispatchPush } from './push/dispatch.js';
 import { PushSubscriptionStore } from './push/store.js';
 import { configureVapid, generateVapidKeys } from './push/vapid.js';
@@ -50,6 +51,11 @@ import { SERVER_VERSION } from './version.js';
 
 export { composeBriefing } from './briefing.js';
 export { HttpsConfigError, type LoadedCert } from './https/store.js';
+export {
+  createSqliteObjectivesStore,
+  ObjectivesError,
+  type ObjectivesStore,
+} from './objectives.js';
 export { SESSION_COOKIE_NAME, SESSION_TTL_MS, SessionStore } from './sessions.js';
 export {
   CONFIG_FILE_COMMENT,
@@ -62,12 +68,12 @@ export {
   type HttpsConfig,
   hashToken,
   type LoadedSlot,
-  loadTeamConfigFromFile,
+  loadSquadronConfigFromFile,
   SlotLoadError,
   type SlotStore,
-  type TeamConfig,
+  type SquadronConfig,
   teammatesFromStore,
-  writeTeamConfig,
+  writeSquadronConfig,
 } from './slots.js';
 export {
   currentCode as currentTotpCode,
@@ -86,8 +92,8 @@ export { SERVER_VERSION };
 export interface RunServerOptions {
   /** Fully-loaded slot store — the caller is responsible for building this. */
   slots: SlotStore;
-  /** Team config (name, mission, brief). */
-  team: Team;
+  /** Squadron config (name, mission, brief). */
+  squadron: Squadron;
   /** Role definitions keyed by role name. */
   roles: Record<string, Role>;
   /**
@@ -97,16 +103,16 @@ export interface RunServerOptions {
    */
   https?: HttpsConfig;
   /**
-   * Existing VAPID credentials from the team config file. When
+   * Existing VAPID credentials from the squadron config file. When
    * `null` or omitted AND `configPath` is set, runServer() will
    * auto-generate a fresh keypair and persist it back to the
    * config file. Set explicitly to skip Web Push entirely.
    */
   webPush?: WebPushConfig | null;
   /**
-   * Path to the team config file — required only when auto-generating
+   * Path to the squadron config file — required only when auto-generating
    * VAPID keys on first boot, since we need to know where to write
-   * the new `webPush` block. Loaders (`loadTeamConfigFromFile` +
+   * the new `webPush` block. Loaders (`loadSquadronConfigFromFile` +
    * the CLI entry) already know this path; lib consumers that
    * construct RunServerOptions by hand can pass it explicitly.
    */
@@ -114,7 +120,7 @@ export interface RunServerOptions {
   /**
    * Directory to store cert files in when `https.mode === 'self-signed'`.
    * Required for self-signed mode, ignored otherwise. Typically
-   * `dirname(configPath)` so certs sit next to the team config.
+   * `dirname(configPath)` so certs sit next to the squadron config.
    */
   configDir?: string;
   /**
@@ -195,10 +201,11 @@ export async function runServer(options: RunServerOptions): Promise<RunningServe
   const eventLog = new SqliteEventLog(db);
   const sessions = new SessionStore(db);
   const pushStore = new PushSubscriptionStore(db);
+  const objectivesStore = createSqliteObjectivesStore(db);
   sessions.purgeExpired();
 
   // VAPID lifecycle: either the caller provided keys (from the
-  // team config file), or we generate a fresh set and persist them
+  // squadron config file), or we generate a fresh set and persist them
   // back to disk so subsequent restarts reuse the same credentials.
   // Skipping entirely is possible by passing webPush: null AND
   // omitting configPath — tests do this.
@@ -308,8 +315,9 @@ export async function runServer(options: RunServerOptions): Promise<RunningServe
     broker,
     slots: options.slots,
     sessions,
-    team: options.team,
+    squadron: options.squadron,
     roles: options.roles,
+    objectives: objectivesStore,
     version: SERVER_VERSION,
     logger: log,
     secureCookies,

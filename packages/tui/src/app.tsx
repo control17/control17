@@ -162,8 +162,8 @@ const INITIAL_STATE: State = {
 export function App({ client, briefing }: Props) {
   const selfCallsign = briefing.callsign;
   const selfRole = briefing.role;
-  const teamName = briefing.team.name;
-  const teamMission = briefing.team.mission;
+  const teamName = briefing.squadron.name;
+  const teamMission = briefing.squadron.mission;
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const abortRef = useRef<AbortController | null>(null);

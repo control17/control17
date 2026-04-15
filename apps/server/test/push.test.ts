@@ -4,7 +4,7 @@
  */
 
 import { Broker, InMemoryEventLog } from '@control17/core';
-import type { Message, Role, Team } from '@control17/sdk/types';
+import type { Message, Role, Squadron } from '@control17/sdk/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { openDatabase } from '../src/db.js';
@@ -68,14 +68,14 @@ const MockWebPushError = mocks.MockWebPushError;
 const OP_TOKEN = 'c17_push_test_operator_token';
 const BOT_TOKEN = 'c17_push_test_bot_token';
 
-const TEAM: Team = {
+const SQUADRON: Squadron = {
   name: 'alpha-squadron',
   mission: 'Test push notifications.',
   brief: '',
 };
 
 const ROLES: Record<string, Role> = {
-  operator: { description: '', instructions: '', editor: true },
+  operator: { description: '', instructions: '' },
   implementer: { description: '', instructions: '' },
 };
 
@@ -367,7 +367,7 @@ describe('push HTTP endpoints', () => {
       broker,
       slots,
       sessions,
-      team: TEAM,
+      squadron: SQUADRON,
       roles: ROLES,
       version: '0.0.0',
       logger: noopLogger(),

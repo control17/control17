@@ -8,7 +8,7 @@
  */
 
 import { Broker, InMemoryEventLog } from '@control17/core';
-import type { Role, SessionResponse, Team } from '@control17/sdk/types';
+import type { Role, SessionResponse, Squadron } from '@control17/sdk/types';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { openDatabase } from '../src/db.js';
@@ -19,7 +19,7 @@ import { currentCode, generateSecret, verifyCode } from '../src/totp.js';
 const OP_TOKEN = 'c17_auth_test_operator_token';
 const BOT_TOKEN = 'c17_auth_test_bot_token';
 
-const TEAM: Team = {
+const SQUADRON: Squadron = {
   name: 'alpha-squadron',
   mission: 'Verify the auth surface.',
   brief: '',
@@ -27,9 +27,8 @@ const TEAM: Team = {
 
 const ROLES: Record<string, Role> = {
   operator: {
-    description: 'Directs the team.',
-    instructions: 'Lead the team.',
-    editor: true,
+    description: 'Directs the squadron.',
+    instructions: 'Lead the squadron.',
   },
   implementer: {
     description: 'Does the work.',
@@ -46,7 +45,13 @@ function makeApp(options: { now?: () => number; totpSecret?: string } = {}) {
     idFactory: () => 'msg-fixed',
   });
   const slots = createSlotStore([
-    { callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN, totpSecret: secret },
+    {
+      callsign: 'ACTUAL',
+      role: 'operator',
+      authority: 'commander',
+      token: OP_TOKEN,
+      totpSecret: secret,
+    },
     { callsign: 'build-bot', role: 'implementer', token: BOT_TOKEN },
   ]);
   const db = openDatabase(':memory:');
@@ -55,7 +60,7 @@ function makeApp(options: { now?: () => number; totpSecret?: string } = {}) {
     broker,
     slots,
     sessions,
-    team: TEAM,
+    squadron: SQUADRON,
     roles: ROLES,
     version: '0.0.0',
     logger: {

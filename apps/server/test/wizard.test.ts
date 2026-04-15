@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadTeamConfigFromFile, SlotLoadError } from '../src/slots.js';
+import { loadSquadronConfigFromFile, SlotLoadError } from '../src/slots.js';
 import { currentCode } from '../src/totp.js';
 import {
   DEFAULT_ROLES,
@@ -53,11 +53,11 @@ describe('runFirstRunWizard', () => {
     return join(dir, 'control17.json');
   }
 
-  it('creates a team with a single slot using defaults', async () => {
+  it('creates a squadron with a single commander slot using defaults', async () => {
     const configPath = tmpConfigPath();
     let tokenCounter = 0;
     const io = mockIO([
-      // team name (default squadron)
+      // squadron name (default alpha-squadron)
       '',
       // mission (required)
       'Ship the payment service',
@@ -66,6 +66,8 @@ describe('runFirstRunWizard', () => {
       // slot 1: callsign (default ACTUAL)
       '',
       // slot 1: role (default operator)
+      '',
+      // slot 1: authority (default commander)
       '',
       // press enter after banner
       '',
@@ -83,22 +85,25 @@ describe('runFirstRunWizard', () => {
     });
 
     expect(config.store.size()).toBe(1);
-    expect(config.store.resolve('c17_test_token_1')?.callsign).toBe('ACTUAL');
-    expect(config.store.resolve('c17_test_token_1')?.role).toBe('operator');
-    expect(config.team.name).toBe('squadron');
-    expect(config.team.mission).toBe('Ship the payment service');
-    expect(config.team.brief).toBe('');
+    const actual = config.store.resolve('c17_test_token_1');
+    expect(actual?.callsign).toBe('ACTUAL');
+    expect(actual?.role).toBe('operator');
+    expect(actual?.authority).toBe('commander');
+    expect(config.squadron.name).toBe('alpha-squadron');
+    expect(config.squadron.mission).toBe('Ship the payment service');
+    expect(config.squadron.brief).toBe('');
 
     const onDisk = JSON.parse(readFileSync(configPath, 'utf8')) as {
-      team: { name: string; mission: string; brief: string };
-      roles: Record<string, { editor?: boolean }>;
-      slots: Array<{ callsign: string; role: string; tokenHash: string }>;
+      squadron: { name: string; mission: string; brief: string };
+      roles: Record<string, { description?: string; instructions?: string }>;
+      slots: Array<{ callsign: string; role: string; authority?: string; tokenHash: string }>;
     };
-    expect(onDisk.team.name).toBe('squadron');
-    expect(onDisk.team.mission).toBe('Ship the payment service');
+    expect(onDisk.squadron.name).toBe('alpha-squadron');
+    expect(onDisk.squadron.mission).toBe('Ship the payment service');
     expect(onDisk.slots).toHaveLength(1);
     expect(onDisk.slots[0]?.callsign).toBe('ACTUAL');
     expect(onDisk.slots[0]?.role).toBe('operator');
+    expect(onDisk.slots[0]?.authority).toBe('commander');
     expect(onDisk.slots[0]?.tokenHash).toMatch(/^sha256:/);
 
     // All 4 default roles ship with every generated config.
@@ -108,30 +113,32 @@ describe('runFirstRunWizard', () => {
       'reviewer',
       'watcher',
     ]);
-    expect(onDisk.roles.operator?.editor).toBe(true);
-    expect(onDisk.roles.implementer?.editor).toBeUndefined();
 
     // File can be re-loaded round-trip.
-    const reloaded = loadTeamConfigFromFile(configPath);
-    expect(reloaded.store.resolve('c17_test_token_1')?.callsign).toBe('ACTUAL');
+    const reloaded = loadSquadronConfigFromFile(configPath);
+    const reloadedSlot = reloaded.store.resolve('c17_test_token_1');
+    expect(reloadedSlot?.callsign).toBe('ACTUAL');
+    expect(reloadedSlot?.authority).toBe('commander');
   });
 
-  it('collects multiple slots when the operator says yes', async () => {
+  it('collects multiple slots with mixed authority tiers', async () => {
     const configPath = tmpConfigPath();
     let tokenCounter = 0;
     const io = mockIO([
       'alpha-squadron',
       'ship the payment service',
       'we own the full lifecycle',
-      // slot 1 (operator — TOTP prompt fires, we skip)
+      // slot 1 — commander (TOTP prompt fires, skip)
       'ACTUAL',
       'operator',
+      '', // default commander
       '',
       'n',
       'y',
-      // slot 2 (implementer — no TOTP prompt)
+      // slot 2 — operator (no TOTP prompt)
       'ALPHA-1',
       'implementer',
+      '', // default operator
       '',
       'no',
     ]);
@@ -145,10 +152,70 @@ describe('runFirstRunWizard', () => {
 
     expect(config.store.size()).toBe(2);
     expect(config.store.resolve('c17_test_token_1')?.callsign).toBe('ACTUAL');
+    expect(config.store.resolve('c17_test_token_1')?.authority).toBe('commander');
     expect(config.store.resolve('c17_test_token_2')?.callsign).toBe('ALPHA-1');
     expect(config.store.resolve('c17_test_token_2')?.role).toBe('implementer');
-    expect(config.team.name).toBe('alpha-squadron');
-    expect(config.team.brief).toBe('we own the full lifecycle');
+    expect(config.store.resolve('c17_test_token_2')?.authority).toBe('operator');
+    expect(config.squadron.name).toBe('alpha-squadron');
+    expect(config.squadron.brief).toBe('we own the full lifecycle');
+  });
+
+  it('accepts lieutenant as an explicit authority', async () => {
+    const configPath = tmpConfigPath();
+    let tokenCounter = 0;
+    const io = mockIO([
+      'alpha-squadron',
+      'mission',
+      '',
+      // slot 1: commander (default)
+      'ACTUAL',
+      'operator',
+      '',
+      '',
+      'n',
+      'y',
+      // slot 2: explicit lieutenant
+      'LT-ONE',
+      'operator',
+      'lieutenant',
+      '',
+      // LT gets TOTP prompt — skip
+      'n',
+      'n',
+    ]);
+    const config = await runFirstRunWizard({
+      configPath,
+      io,
+      tokenFactory: () => `c17_t_${++tokenCounter}`,
+      qrRenderer: () => '',
+    });
+    expect(config.store.resolve('c17_t_2')?.authority).toBe('lieutenant');
+  });
+
+  it('re-prompts on invalid authority', async () => {
+    const configPath = tmpConfigPath();
+    const io = mockIO([
+      'squadron',
+      'hold the line',
+      '',
+      'ACTUAL',
+      'operator',
+      // invalid authority, then valid
+      'admin',
+      '',
+      // press enter after banner
+      '',
+      'n',
+      'n',
+    ]);
+    const config = await runFirstRunWizard({
+      configPath,
+      io,
+      tokenFactory: () => 'c17_tok',
+      qrRenderer: () => '',
+    });
+    expect(config.store.size()).toBe(1);
+    expect(io.output.some((l) => l.includes('authority must be one of'))).toBe(true);
   });
 
   it('re-prompts on invalid callsign and accepts custom roles with a note', async () => {
@@ -163,7 +230,11 @@ describe('runFirstRunWizard', () => {
       'valid-callsign',
       // custom role — accepted with note, auto-added to config
       'custom-role',
+      // commander default
       '',
+      '',
+      // commander → TOTP prompt fires, skip
+      'n',
       'n',
     ]);
 
@@ -171,6 +242,7 @@ describe('runFirstRunWizard', () => {
       configPath,
       io,
       tokenFactory: () => 'c17_mocked_token',
+      qrRenderer: () => '',
     });
 
     expect(config.store.size()).toBe(1);
@@ -181,7 +253,7 @@ describe('runFirstRunWizard', () => {
     expect(io.output.some((l) => l.includes('custom role'))).toBe(true);
 
     // Generated config must be loadable — custom role was auto-injected.
-    const reloaded = loadTeamConfigFromFile(configPath);
+    const reloaded = loadSquadronConfigFromFile(configPath);
     expect(reloaded.store.resolve('c17_mocked_token')?.role).toBe('custom-role');
     expect(reloaded.roles['custom-role']).toBeDefined();
   });
@@ -196,6 +268,8 @@ describe('runFirstRunWizard', () => {
       // invalid role key (contains space), then valid
       'bad role',
       'operator',
+      // commander default
+      '',
       '',
       // skip web UI login
       'n',
@@ -220,14 +294,15 @@ describe('runFirstRunWizard', () => {
       '',
       'ACTUAL',
       'operator',
+      '', // commander
       '',
-      // skip web UI login for operator
       'n',
       'y',
-      // duplicate → re-prompted, then accepted
+      // duplicate → re-prompted
       'ACTUAL',
       'ALPHA-1',
       'implementer',
+      '', // operator
       '',
       'n',
     ]);
@@ -256,8 +331,6 @@ describe('runFirstRunWizard', () => {
       'reviewer',
       'watcher',
     ]);
-    expect(DEFAULT_ROLES.operator?.editor).toBe(true);
-    expect(DEFAULT_ROLES.implementer?.editor).toBeUndefined();
   });
 
   // ── TOTP enrollment ────────────────────────────────────────────────
@@ -277,7 +350,7 @@ describe('runFirstRunWizard', () => {
       };
     }
 
-    it('enrolls an operator slot with a valid code and persists the secret', async () => {
+    it('enrolls a commander slot with a valid code and persists the secret', async () => {
       const configPath = tmpConfigPath();
       const code = currentCode(FIXED_SECRET, FIXED_NOW);
       const io = mockIO([
@@ -286,6 +359,7 @@ describe('runFirstRunWizard', () => {
         '',
         'ACTUAL',
         'operator',
+        '', // commander (default)
         '',
         // enable web UI login? default Y
         'y',
@@ -297,8 +371,7 @@ describe('runFirstRunWizard', () => {
       const config = await runFirstRunWizard(enrollmentOptions(io, configPath));
       expect(config.store.resolve('c17_test_token')?.totpSecret).toBe(FIXED_SECRET);
 
-      // Persisted on disk so the next boot reuses it.
-      const reloaded = loadTeamConfigFromFile(configPath);
+      const reloaded = loadSquadronConfigFromFile(configPath);
       expect(reloaded.store.resolve('c17_test_token')?.totpSecret).toBe(FIXED_SECRET);
       expect(io.output.some((l) => l.includes('enrollment confirmed for ACTUAL'))).toBe(true);
     });
@@ -312,12 +385,10 @@ describe('runFirstRunWizard', () => {
         '',
         'ACTUAL',
         'operator',
+        '', // commander
         '',
-        // enable web UI login? yes
         'y',
-        // first attempt: wrong
         '000000',
-        // second attempt: correct
         code,
         'n',
       ]);
@@ -328,19 +399,8 @@ describe('runFirstRunWizard', () => {
 
     it('skips enrollment when the user answers n at the prompt', async () => {
       const configPath = tmpConfigPath();
-      const io = mockIO([
-        '',
-        'mission',
-        '',
-        'ACTUAL',
-        'operator',
-        '',
-        // enable web UI login? no
-        'n',
-        'n',
-      ]);
+      const io = mockIO(['', 'mission', '', 'ACTUAL', 'operator', '', '', 'n', 'n']);
       const config = await runFirstRunWizard(enrollmentOptions(io, configPath));
-      // Secret should not be set — the slot is machine-only until c17 enroll.
       expect(config.store.resolve('c17_test_token')?.totpSecret).toBeFalsy();
       expect(io.output.some((l) => l.includes('c17 enroll --slot ACTUAL'))).toBe(true);
     });
@@ -354,8 +414,8 @@ describe('runFirstRunWizard', () => {
         'ACTUAL',
         'operator',
         '',
+        '',
         'y',
-        // 3 bad attempts — exceeds TOTP_MAX_CONFIRM_ATTEMPTS
         '000000',
         '111111',
         '222222',
@@ -366,22 +426,29 @@ describe('runFirstRunWizard', () => {
       expect(io.output.some((l) => l.includes('too many bad attempts'))).toBe(true);
     });
 
-    it('does NOT prompt TOTP for non-editor role slots', async () => {
+    it('does NOT prompt TOTP for plain-operator-authority slots', async () => {
+      // The scenario: a single slot that the user explicitly marks as
+      // operator authority. Since at least one commander is required,
+      // the wizard rejects the config at write time — but the point of
+      // this test is just that the TOTP prompt never fires. We catch
+      // the SlotLoadError at the end.
       const configPath = tmpConfigPath();
       const io = mockIO([
         '',
         'mission',
         '',
-        // implementer is non-editor — TOTP prompt should not fire
-        'ALPHA-1',
-        'implementer',
+        'ACTUAL',
+        'operator',
+        'operator', // explicitly downgrade authority
         '',
-        // add another slot? no
+        // no TOTP prompt — go straight to "add another slot?"
         'n',
       ]);
-      await runFirstRunWizard(enrollmentOptions(io, configPath));
-      // If the TOTP prompt had fired, the queue would exhaust and we'd
-      // throw. Passing through means the prompt was correctly skipped.
+      await expect(runFirstRunWizard(enrollmentOptions(io, configPath))).rejects.toThrow(
+        /at least one slot must have authority=commander/,
+      );
+      // If the TOTP prompt had fired, the queue would exhaust before
+      // we got to the "no commander" check.
       expect(io.output.every((l) => !l.includes('enable web UI login'))).toBe(true);
     });
   });

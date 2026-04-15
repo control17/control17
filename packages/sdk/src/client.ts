@@ -6,12 +6,21 @@
  * strongly-typed result or a `ClientError`.
  */
 
-import { AUTH_HEADER, PATHS, PROTOCOL_HEADER, PROTOCOL_VERSION } from './protocol.js';
+import {
+  AUTH_HEADER,
+  OBJECTIVE_PATHS,
+  PATHS,
+  PROTOCOL_HEADER,
+  PROTOCOL_VERSION,
+} from './protocol.js';
 import {
   BriefingResponseSchema,
+  GetObjectiveResponseSchema,
   HealthResponseSchema,
   HistoryResponseSchema,
+  ListObjectivesResponseSchema,
   MessageSchema,
+  ObjectiveSchema,
   PushPayloadSchema,
   PushResultSchema,
   PushSubscriptionResponseSchema,
@@ -21,16 +30,25 @@ import {
 } from './schemas.js';
 import type {
   BriefingResponse,
+  CancelObjectiveRequest,
+  CreateObjectiveRequest,
+  DiscussObjectiveRequest,
+  GetObjectiveResponse,
   HealthResponse,
   HistoryQuery,
+  ListObjectivesQuery,
   Message,
+  Objective,
   PushPayload,
   PushResult,
   PushSubscriptionPayload,
   PushSubscriptionResponse,
+  ReassignObjectiveRequest,
   RosterResponse,
   SessionResponse,
   TotpLoginRequest,
+  UpdateObjectiveRequest,
+  UpdateWatchersRequest,
   VapidPublicKeyResponse,
 } from './types.js';
 
@@ -221,12 +239,12 @@ export class Client {
   }
 
   /**
-   * Fetch the team-context briefing for the authenticated slot.
+   * Fetch the squadron-context briefing for the authenticated slot.
    *
-   * Returns the caller's callsign, role, team (name/mission/brief),
-   * list of teammates, and a pre-composed `instructions` string ready
-   * for `new Server({instructions})` in the MCP link. The TUI uses it
-   * to show "who you are on this team" in the header.
+   * Returns the caller's callsign, role, authority, squadron
+   * (name/mission/brief), list of teammates, open objectives currently
+   * on the caller's plate, and a pre-composed `instructions` string
+   * ready for `new Server({instructions})` in the MCP link.
    */
   async briefing(): Promise<BriefingResponse> {
     const resp = await this.request(PATHS.briefing, { method: 'GET' });
@@ -234,14 +252,137 @@ export class Client {
   }
 
   /**
-   * List all slots defined on the team (including any not currently
+   * List all slots defined on the squadron (including any not currently
    * connected) plus the runtime connection state of each registered
-   * agent. Use this for the team roster view in the TUI and for the
-   * `roster` MCP tool on the link side.
+   * agent. Use this for the squadron roster view in the TUI and for
+   * the `roster` MCP tool on the link side.
    */
   async roster(): Promise<RosterResponse> {
     const resp = await this.request(PATHS.roster, { method: 'GET' });
     return RosterResponseSchema.parse(await this.json(resp));
+  }
+
+  // ─────────────────────── Objectives ───────────────────────
+
+  /**
+   * List objectives. Operators see only their own unless they hold
+   * lieutenant+ authority server-side, in which case the `assignee`
+   * filter accepts any callsign. Pass `status` to scope to a single
+   * lifecycle state; omit to see all.
+   */
+  async listObjectives(query: ListObjectivesQuery = {}): Promise<Objective[]> {
+    const params = new URLSearchParams();
+    if (query.assignee) params.set('assignee', query.assignee);
+    if (query.status) params.set('status', query.status);
+    const qs = params.toString();
+    const path = qs ? `${PATHS.objectives}?${qs}` : PATHS.objectives;
+    const resp = await this.request(path, { method: 'GET' });
+    return ListObjectivesResponseSchema.parse(await this.json(resp)).objectives;
+  }
+
+  /** Fetch a single objective plus its full event history. */
+  async getObjective(id: string): Promise<GetObjectiveResponse> {
+    const resp = await this.request(OBJECTIVE_PATHS.one(id), { method: 'GET' });
+    return GetObjectiveResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Create (and atomically assign) an objective. Requires the caller
+   * to hold `lieutenant` or `commander` authority server-side.
+   */
+  async createObjective(payload: CreateObjectiveRequest): Promise<Objective> {
+    const resp = await this.request(PATHS.objectives, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Update an objective's status (active ↔ blocked), post a note to
+   * its thread, or both. Cannot transition to `done` — use
+   * `completeObjective` for that.
+   */
+  async updateObjective(id: string, payload: UpdateObjectiveRequest): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.one(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Mark an objective done with a required result summary. Only the
+   * objective's current assignee can call this.
+   */
+  async completeObjective(id: string, result: string): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.complete(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result }),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Terminally cancel an objective. Originating lieutenant+ or any
+   * commander.
+   */
+  async cancelObjective(id: string, payload: CancelObjectiveRequest = {}): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.cancel(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Reassign an objective to a different slot. Commander only. Pushes
+   * to both old and new assignee.
+   */
+  async reassignObjective(id: string, payload: ReassignObjectiveRequest): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.reassign(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Add and/or remove watchers on an objective. Commander or the
+   * originating lieutenant+ only. Every callsign must resolve to a
+   * known squadron slot. Empty add/remove arrays are no-ops; the
+   * server still returns the updated objective for sync purposes.
+   */
+  async updateObjectiveWatchers(
+    id: string,
+    payload: UpdateWatchersRequest,
+  ): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.watchers(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Post a discussion message into an objective's thread. Fans out to
+   * every member of the thread (originator + assignee + commanders +
+   * explicit watchers) via their SSE streams, scoped to thread key
+   * `obj:<id>`. Caller must already be a thread member server-side.
+   */
+  async discussObjective(id: string, payload: DiscussObjectiveRequest): Promise<Message> {
+    const resp = await this.request(OBJECTIVE_PATHS.discuss(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return MessageSchema.parse(await this.json(resp));
   }
 
   async history(query: HistoryQuery = {}): Promise<Message[]> {

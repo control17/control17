@@ -14,13 +14,13 @@
  */
 
 import { Client } from '@control17/sdk/client';
-import type { Role, Team } from '@control17/sdk/types';
+import type { Role, Squadron } from '@control17/sdk/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type RunningServer, runServer } from '../src/run.js';
 import { createSlotStore } from '../src/slots.js';
 
 const OP_TOKEN = 'c17_shutdown_test_op';
-const TEAM: Team = {
+const SQUADRON: Squadron = {
   name: 'shutdown-test-squadron',
   mission: 'Verify shutdown does not hang on live SSE subscribers.',
   brief: '',
@@ -34,10 +34,12 @@ describe('runServer shutdown with live SSE subscriber', () => {
   let client: Client;
 
   beforeAll(async () => {
-    const slots = createSlotStore([{ callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN }]);
+    const slots = createSlotStore([
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: OP_TOKEN },
+    ]);
     server = await runServer({
       slots,
-      team: TEAM,
+      squadron: SQUADRON,
       roles: ROLES,
       port: 0,
       host: '127.0.0.1',

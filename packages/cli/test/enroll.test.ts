@@ -36,17 +36,22 @@ function tmpPath(): string {
 }
 
 const VALID_CONFIG_JSON = JSON.stringify({
-  team: {
+  squadron: {
     name: 'alpha-squadron',
     mission: 'ship',
     brief: '',
   },
   roles: {
-    operator: { description: '', instructions: '', editor: true },
+    operator: { description: '', instructions: '' },
     implementer: { description: '', instructions: '' },
   },
   slots: [
-    { callsign: 'ACTUAL', role: 'operator', tokenHash: `sha256:${'a'.repeat(64)}` },
+    {
+      callsign: 'ACTUAL',
+      role: 'operator',
+      authority: 'commander',
+      tokenHash: `sha256:${'a'.repeat(64)}`,
+    },
     { callsign: 'ALPHA-1', role: 'implementer', tokenHash: `sha256:${'b'.repeat(64)}` },
   ],
 });

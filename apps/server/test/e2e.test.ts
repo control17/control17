@@ -15,7 +15,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@control17/sdk/client';
-import type { Role, Team } from '@control17/sdk/types';
+import type { Role, Squadron } from '@control17/sdk/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type RunningServer, runServer } from '../src/run.js';
 import { createSlotStore } from '../src/slots.js';
@@ -41,7 +41,7 @@ const OP_TOKEN = 'c17_test_operator';
 const AGENT_TOKEN = 'c17_test_agent';
 const PEER_TOKEN = 'c17_test_peer';
 
-const TEAM: Team = {
+const SQUADRON: Squadron = {
   name: 'e2e-squadron',
   mission: 'Exercise the full control17 stack end-to-end.',
   brief: '',
@@ -49,9 +49,8 @@ const TEAM: Team = {
 
 const ROLES: Record<string, Role> = {
   operator: {
-    description: 'Directs the team.',
+    description: 'Directs the squadron.',
     instructions: 'Lead.',
-    editor: true,
   },
   implementer: {
     description: 'Writes code.',
@@ -69,13 +68,13 @@ describe('end-to-end: operator → broker → link → channel event', () => {
 
   beforeAll(async () => {
     const slots = createSlotStore([
-      { callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN },
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: OP_TOKEN },
       { callsign: AGENT_ID, role: 'implementer', token: AGENT_TOKEN },
       { callsign: PEER_AGENT_ID, role: 'implementer', token: PEER_TOKEN },
     ]);
     server = await runServer({
       slots,
-      team: TEAM,
+      squadron: SQUADRON,
       roles: ROLES,
       port: 0,
       host: '127.0.0.1',

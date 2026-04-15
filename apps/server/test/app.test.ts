@@ -1,6 +1,12 @@
 import { Broker, InMemoryEventLog } from '@control17/core';
 import { PROTOCOL_HEADER } from '@control17/sdk/protocol';
-import type { BriefingResponse, Message, Role, RosterResponse, Team } from '@control17/sdk/types';
+import type {
+  BriefingResponse,
+  Message,
+  Role,
+  RosterResponse,
+  Squadron,
+} from '@control17/sdk/types';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { openDatabase } from '../src/db.js';
@@ -10,7 +16,7 @@ import { createSlotStore } from '../src/slots.js';
 const OP_TOKEN = 'c17_test_operator_secret';
 const BOT_TOKEN = 'c17_test_bot_secret';
 
-const TEAM: Team = {
+const SQUADRON: Squadron = {
   name: 'alpha-squadron',
   mission: 'Ship and operate the payment service.',
   brief: 'We own the full lifecycle.',
@@ -18,9 +24,8 @@ const TEAM: Team = {
 
 const ROLES: Record<string, Role> = {
   operator: {
-    description: 'Directs the team.',
-    instructions: 'Lead the team.',
-    editor: true,
+    description: 'Directs the squadron.',
+    instructions: 'Lead the squadron.',
   },
   implementer: {
     description: 'Writes code.',
@@ -35,20 +40,17 @@ function makeApp() {
     idFactory: () => 'msg-fixed',
   });
   const slots = createSlotStore([
-    { callsign: 'ACTUAL', role: 'operator', token: OP_TOKEN },
+    { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: OP_TOKEN },
     { callsign: 'build-bot', role: 'implementer', token: BOT_TOKEN },
   ]);
   // Tests run with an in-memory SQLite solely for the sessions table.
-  // The broker uses InMemoryEventLog above, so these two stores don't
-  // actually share state — they only share the SQLite handle because
-  // SessionStore needs one.
   const db = openDatabase(':memory:');
   const sessions = new SessionStore(db);
   const app = createApp({
     broker,
     slots,
     sessions,
-    team: TEAM,
+    squadron: SQUADRON,
     roles: ROLES,
     version: '0.0.0',
     logger: {
@@ -85,29 +87,30 @@ describe('app GET /healthz', () => {
 });
 
 describe('app GET /briefing', () => {
-  it('returns the team-context briefing for the authenticated slot', async () => {
+  it('returns the squadron-context briefing for the authenticated slot', async () => {
     const { app } = makeApp();
     const res = await app.request('/briefing', authed(OP_TOKEN));
     expect(res.status).toBe(200);
     const body = (await res.json()) as BriefingResponse;
     expect(body.callsign).toBe('ACTUAL');
     expect(body.role).toBe('operator');
-    expect(body.team).toEqual(TEAM);
+    expect(body.authority).toBe('commander');
+    expect(body.squadron).toEqual(SQUADRON);
     expect(body.teammates.map((t) => t.callsign).sort()).toEqual(['ACTUAL', 'build-bot']);
-    expect(body.canEdit).toBe(true);
+    expect(body.openObjectives).toEqual([]);
     expect(body.instructions).toContain('ACTUAL');
     expect(body.instructions).toContain('operator');
-    expect(body.instructions).toContain(TEAM.mission);
+    expect(body.instructions).toContain(SQUADRON.mission);
   });
 
-  it('returns canEdit=false for slots whose role lacks the editor flag', async () => {
+  it('returns authority=operator for slots that omit authority in their config', async () => {
     const { app } = makeApp();
     const res = await app.request('/briefing', authed(BOT_TOKEN));
     expect(res.status).toBe(200);
     const body = (await res.json()) as BriefingResponse;
     expect(body.callsign).toBe('build-bot');
     expect(body.role).toBe('implementer');
-    expect(body.canEdit).toBe(false);
+    expect(body.authority).toBe('operator');
   });
 
   it('requires auth', async () => {
@@ -157,8 +160,8 @@ describe('app GET /roster', () => {
     const { app, broker } = makeApp();
     // Pre-seed both slots so they appear in connected state
     broker.seedSlots([
-      { callsign: 'ACTUAL', role: 'operator' },
-      { callsign: 'build-bot', role: 'implementer' },
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+      { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
     ]);
 
     const res = await app.request('/roster', authed(OP_TOKEN));

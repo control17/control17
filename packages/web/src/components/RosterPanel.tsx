@@ -46,13 +46,13 @@ export function RosterPanel({ viewer }: RosterPanelProps) {
       {b && (
         <div class="mb-5 pb-4 border-b border-brand-border">
           <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-1">Team</div>
-          <div class="text-lg font-bold text-brand-text">{b.team.name}</div>
-          {b.team.mission && (
-            <div class="text-sm text-brand-muted mt-1 leading-snug">{b.team.mission}</div>
+          <div class="text-lg font-bold text-brand-text">{b.squadron.name}</div>
+          {b.squadron.mission && (
+            <div class="text-sm text-brand-muted mt-1 leading-snug">{b.squadron.mission}</div>
           )}
-          {b.team.brief && (
+          {b.squadron.brief && (
             <div class="text-xs text-brand-muted mt-2 leading-snug whitespace-pre-wrap">
-              {b.team.brief}
+              {b.squadron.brief}
             </div>
           )}
         </div>

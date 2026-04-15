@@ -100,8 +100,8 @@ describe('runPushCommand', () => {
 describe('runRosterCommand', () => {
   it('renders a formatted table when teammates exist', async () => {
     const teammates: Teammate[] = [
-      { callsign: 'ACTUAL', role: 'operator' },
-      { callsign: 'ALPHA-1', role: 'implementer' },
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+      { callsign: 'ALPHA-1', role: 'implementer', authority: 'operator' },
     ];
     const connected: Agent[] = [
       {
@@ -110,6 +110,7 @@ describe('runRosterCommand', () => {
         createdAt: 1_700_000_000_000,
         lastSeen: 1_700_000_100_000,
         role: 'operator',
+        authority: 'commander',
       },
     ];
     const client = new Client({

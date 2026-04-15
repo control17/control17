@@ -27,6 +27,7 @@
 import type { Teammate } from '@control17/sdk/types';
 import { briefing } from '../lib/briefing.js';
 import { dmThreadKey, messagesByThread, PRIMARY_THREAD } from '../lib/messages.js';
+import { objectives } from '../lib/objectives.js';
 import { roster } from '../lib/roster.js';
 import { logout } from '../lib/session.js';
 import { lastReadByThread, unreadCount } from '../lib/unread.js';
@@ -35,6 +36,7 @@ import {
   currentView,
   isSidebarOpen,
   selectDmWith,
+  selectObjectivesList,
   selectOverview,
   selectThread,
 } from '../lib/view.js';
@@ -91,6 +93,17 @@ export function Sidebar({ viewer }: SidebarProps) {
   const teamChatActive = view.kind === 'thread' && view.key === PRIMARY_THREAD;
   const teamChatUnread = unreadCount(PRIMARY_THREAD, viewer, lastRead, msgMap);
   const drawerOpen = isSidebarOpen.value;
+  const objectivesActive =
+    view.kind === 'objectives-list' ||
+    view.kind === 'objective-detail' ||
+    view.kind === 'objective-create';
+  // Viewer's active/blocked objective count — surfaced as a badge next
+  // to the sidebar entry so a commander sees how loaded a slot is at
+  // a glance, and an operator sees what's on their plate without
+  // navigating into the panel.
+  const activeObjectiveCount = objectives.value.filter(
+    (o) => o.assignee === viewer && (o.status === 'active' || o.status === 'blocked'),
+  ).length;
 
   return (
     <>
@@ -111,119 +124,140 @@ export function Sidebar({ viewer }: SidebarProps) {
           fixed inset-y-0 left-0 z-40 w-60 shadow-2xl transition-transform duration-200
           ${drawerOpen ? 'translate-x-0 flex' : '-translate-x-full hidden md:flex md:-translate-x-0'}`}
       >
-      {/* ── Overview shortcut ──────────────────────────────────── */}
-      <div class="border-b border-brand-border py-2">
-        <button
-          type="button"
-          onClick={selectOverview}
-          aria-label="Open team overview"
-          class={`w-full text-left px-3 py-1.5 text-sm truncate ${
-            overviewActive
-              ? 'bg-brand-primary/20 text-brand-text border-l-4 border-brand-primary'
-              : 'text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent'
-          }`}
-        >
-          Overview
-        </button>
-      </div>
-
-      {/* ── Team Chat + teammates ──────────────────────────────── */}
-      <ul class="flex-1 overflow-y-auto py-2">
-        <li>
+        {/* ── Overview + Objectives shortcuts ──────────────────────── */}
+        <div class="border-b border-brand-border py-2">
           <button
             type="button"
-            onClick={() => selectThread(PRIMARY_THREAD)}
-            aria-label={
-              teamChatUnread > 0 ? `Open Team Chat (${teamChatUnread} unread)` : 'Open Team Chat'
-            }
-            class={`w-full flex items-center gap-2 px-3 py-1.5 text-sm min-w-0 ${
-              teamChatActive
+            onClick={selectOverview}
+            aria-label="Open team overview"
+            class={`w-full text-left px-3 py-1.5 text-sm truncate ${
+              overviewActive
                 ? 'bg-brand-primary/20 text-brand-text border-l-4 border-brand-primary'
                 : 'text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent'
             }`}
           >
-            <span
-              class={`truncate flex-1 text-left ${
-                teamChatUnread > 0 && !teamChatActive ? 'font-semibold text-brand-text' : ''
+            Overview
+          </button>
+          <button
+            type="button"
+            onClick={selectObjectivesList}
+            aria-label={
+              activeObjectiveCount > 0
+                ? `Open objectives panel (${activeObjectiveCount} on your plate)`
+                : 'Open objectives panel'
+            }
+            class={`w-full flex items-center gap-2 px-3 py-1.5 text-sm truncate ${
+              objectivesActive
+                ? 'bg-brand-primary/20 text-brand-text border-l-4 border-brand-primary'
+                : 'text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent'
+            }`}
+          >
+            <span class="truncate flex-1 text-left">Objectives</span>
+            {activeObjectiveCount > 0 && !objectivesActive && (
+              <UnreadBadge count={activeObjectiveCount} />
+            )}
+          </button>
+        </div>
+
+        {/* ── Team Chat + teammates ──────────────────────────────── */}
+        <ul class="flex-1 overflow-y-auto py-2">
+          <li>
+            <button
+              type="button"
+              onClick={() => selectThread(PRIMARY_THREAD)}
+              aria-label={
+                teamChatUnread > 0 ? `Open Team Chat (${teamChatUnread} unread)` : 'Open Team Chat'
+              }
+              class={`w-full flex items-center gap-2 px-3 py-1.5 text-sm min-w-0 ${
+                teamChatActive
+                  ? 'bg-brand-primary/20 text-brand-text border-l-4 border-brand-primary'
+                  : 'text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent'
               }`}
             >
-              Team Chat
-            </span>
-            {teamChatUnread > 0 && !teamChatActive && <UnreadBadge count={teamChatUnread} />}
-          </button>
-        </li>
-        {teammates.map((t) => {
-          const connected = onlineByCallsign.get(t.callsign) ?? 0;
-          const online = connected > 0;
-          const active = view.kind === 'thread' && view.key === dmThreadKey(t.callsign);
-          const unread = unreadCount(dmThreadKey(t.callsign), viewer, lastRead, msgMap);
-          return (
-            <li key={t.callsign}>
-              <button
-                type="button"
-                onClick={() => selectDmWith(t.callsign)}
-                aria-label={
-                  unread > 0
-                    ? `Message ${t.callsign} (${online ? 'online' : 'offline'}, ${unread} unread)`
-                    : `Message ${t.callsign} (${online ? 'online' : 'offline'})`
-                }
-                class={`w-full flex items-center gap-2 px-3 py-1.5 text-sm min-w-0 ${
-                  active
-                    ? 'bg-brand-primary/20 text-brand-text border-l-4 border-brand-primary'
-                    : 'text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent'
+              <span
+                class={`truncate flex-1 text-left ${
+                  teamChatUnread > 0 && !teamChatActive ? 'font-semibold text-brand-text' : ''
                 }`}
               >
-                <span
-                  title={online ? 'online' : 'offline'}
-                  class={`w-2.5 h-2.5 rounded-full flex-shrink-0 border ${
-                    online ? 'bg-brand-primary border-brand-primary' : 'bg-transparent border-brand-muted'
-                  }`}
-                  aria-hidden="true"
-                />
-                <span
-                  class={`truncate flex-1 text-left ${
-                    unread > 0 && !active ? 'font-semibold text-brand-text' : ''
+                Team Chat
+              </span>
+              {teamChatUnread > 0 && !teamChatActive && <UnreadBadge count={teamChatUnread} />}
+            </button>
+          </li>
+          {teammates.map((t) => {
+            const connected = onlineByCallsign.get(t.callsign) ?? 0;
+            const online = connected > 0;
+            const active = view.kind === 'thread' && view.key === dmThreadKey(t.callsign);
+            const unread = unreadCount(dmThreadKey(t.callsign), viewer, lastRead, msgMap);
+            return (
+              <li key={t.callsign}>
+                <button
+                  type="button"
+                  onClick={() => selectDmWith(t.callsign)}
+                  aria-label={
+                    unread > 0
+                      ? `Message ${t.callsign} (${online ? 'online' : 'offline'}, ${unread} unread)`
+                      : `Message ${t.callsign} (${online ? 'online' : 'offline'})`
+                  }
+                  class={`w-full flex items-center gap-2 px-3 py-1.5 text-sm min-w-0 ${
+                    active
+                      ? 'bg-brand-primary/20 text-brand-text border-l-4 border-brand-primary'
+                      : 'text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent'
                   }`}
                 >
-                  {t.callsign}
-                </span>
-                {unread > 0 && !active && <UnreadBadge count={unread} />}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {/* ── Sign-out footer ────────────────────────────────────
+                  <span
+                    title={online ? 'online' : 'offline'}
+                    class={`w-2.5 h-2.5 rounded-full flex-shrink-0 border ${
+                      online
+                        ? 'bg-brand-primary border-brand-primary'
+                        : 'bg-transparent border-brand-muted'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span
+                    class={`truncate flex-1 text-left ${
+                      unread > 0 && !active ? 'font-semibold text-brand-text' : ''
+                    }`}
+                  >
+                    {t.callsign}
+                  </span>
+                  {unread > 0 && !active && <UnreadBadge count={unread} />}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {/* ── Sign-out footer ────────────────────────────────────
           Pinned to the bottom of the sidebar column. `mt-auto` is
           redundant because the teammate `<ul>` above already has
           `flex-1`, but we rely on the nav being a flex column to
           push this block out of the scroll area. */}
-      <div class="border-t border-brand-border py-2">
-        <button
-          type="button"
-          onClick={() => {
-            void logout();
-          }}
-          class="w-full text-left px-3 py-1.5 text-sm text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent flex items-center gap-2"
-          aria-label="Sign out"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            class="h-4 w-4 flex-shrink-0"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
+        <div class="border-t border-brand-border py-2">
+          <button
+            type="button"
+            onClick={() => {
+              void logout();
+            }}
+            class="w-full text-left px-3 py-1.5 text-sm text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent flex items-center gap-2"
+            aria-label="Sign out"
           >
-            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-            <path d="M10 17l5-5-5-5" />
-            <path d="M15 12H3" />
-          </svg>
-          <span>sign out</span>
-        </button>
-      </div>
+            <svg
+              viewBox="0 0 24 24"
+              class="h-4 w-4 flex-shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+              <path d="M10 17l5-5-5-5" />
+              <path d="M15 12H3" />
+            </svg>
+            <span>sign out</span>
+          </button>
+        </div>
       </nav>
     </>
   );

@@ -60,20 +60,20 @@ function stubFetch(
 }
 
 describe('<Login />', () => {
-  it('renders the form with callsign and code inputs', () => {
+  it('renders a single 6-digit code input (no callsign field)', () => {
     render(<Login />);
-    expect(screen.getByPlaceholderText('ACTUAL')).toBeTruthy();
     expect(screen.getByPlaceholderText('000000')).toBeTruthy();
+    expect(screen.queryByPlaceholderText('ACTUAL')).toBeNull();
     expect(screen.getByRole('button', { name: /sign in/i })).toBeTruthy();
   });
 
-  it('disables the submit button until both fields are valid', () => {
+  it('disables the submit button until the code is a valid 6 digits', () => {
     render(<Login />);
     const button = screen.getByRole('button', { name: /sign in/i }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
 
-    fireEvent.input(screen.getByPlaceholderText('ACTUAL'), { target: { value: 'ACTUAL' } });
-    expect(button.disabled).toBe(true); // code still empty
+    fireEvent.input(screen.getByPlaceholderText('000000'), { target: { value: '123' } });
+    expect(button.disabled).toBe(true); // not yet 6 digits
 
     fireEvent.input(screen.getByPlaceholderText('000000'), { target: { value: '123456' } });
     expect(button.disabled).toBe(false);
@@ -92,29 +92,35 @@ describe('<Login />', () => {
     });
     render(<Login />);
 
-    fireEvent.input(screen.getByPlaceholderText('ACTUAL'), { target: { value: 'ACTUAL' } });
     fireEvent.input(screen.getByPlaceholderText('000000'), { target: { value: '000000' } });
     fireEvent.submit(screen.getByRole('button', { name: /sign in/i }).closest('form') as Element);
 
     await waitFor(() => {
       expect(screen.getByText(/401|invalid/i)).toBeTruthy();
     });
-    // Code field cleared on failure so retry doesn't need retyping the callsign.
+    // Code field is cleared on failure so the user can re-enter the
+    // next rotation's code immediately without first wiping the box.
     expect((screen.getByPlaceholderText('000000') as HTMLInputElement).value).toBe('');
-    expect((screen.getByPlaceholderText('ACTUAL') as HTMLInputElement).value).toBe('ACTUAL');
   });
 
-  it('updates the session signal on successful login', async () => {
+  it('updates the session signal on successful login (codeless — server matches slot)', async () => {
+    // Server iterates enrolled slots and returns whichever matches.
+    // The SPA doesn't send or know the callsign; it just reads it
+    // back from the SessionResponse.
     stubFetch({
       '/session/totp': () => ({
         status: 200,
-        body: { slot: 'ACTUAL', role: 'operator', expiresAt: 9_999_999_999_999 },
+        body: {
+          slot: 'ACTUAL',
+          role: 'operator',
+          authority: 'commander',
+          expiresAt: 9_999_999_999_999,
+        },
       }),
     });
     expect(session.value.status).toBe('anonymous');
 
     render(<Login />);
-    fireEvent.input(screen.getByPlaceholderText('ACTUAL'), { target: { value: 'ACTUAL' } });
     fireEvent.input(screen.getByPlaceholderText('000000'), { target: { value: '123456' } });
     fireEvent.submit(screen.getByRole('button', { name: /sign in/i }).closest('form') as Element);
 
@@ -124,6 +130,7 @@ describe('<Login />', () => {
     if (session.value.status === 'authenticated') {
       expect(session.value.slot).toBe('ACTUAL');
       expect(session.value.role).toBe('operator');
+      expect(session.value.authority).toBe('commander');
     }
   });
 });
@@ -133,7 +140,7 @@ describe('loginWithTotp', () => {
     stubFetch({
       '/session/totp': () => ({ status: 401, body: { error: 'invalid code' } }),
     });
-    await expect(loginWithTotp('ACTUAL', '000000')).rejects.toThrow();
+    await expect(loginWithTotp('000000')).rejects.toThrow();
     expect(session.value.status).toBe('anonymous');
   });
 });
@@ -148,7 +155,7 @@ describe('<App /> auth gate', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('ACTUAL')).toBeTruthy();
+      expect(screen.getByPlaceholderText('000000')).toBeTruthy();
     });
   });
 
@@ -156,7 +163,12 @@ describe('<App /> auth gate', () => {
     stubFetch({
       '/session': () => ({
         status: 200,
-        body: { slot: 'ACTUAL', role: 'operator', expiresAt: 9_999_999_999_999 },
+        body: {
+          slot: 'ACTUAL',
+          role: 'operator',
+          authority: 'commander',
+          expiresAt: 9_999_999_999_999,
+        },
       }),
     });
     session.value = { status: 'loading' };
@@ -164,7 +176,9 @@ describe('<App /> auth gate', () => {
 
     await waitFor(() => {
       expect(screen.getByText('ACTUAL')).toBeTruthy();
-      expect(screen.getByText('operator')).toBeTruthy();
+      // Header now surfaces rank (authority), not role — commander
+      // was stamped on the session above, so that's what renders.
+      expect(screen.getByText('commander')).toBeTruthy();
       expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy();
     });
   });
