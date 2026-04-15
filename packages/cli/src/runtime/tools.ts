@@ -329,7 +329,7 @@ function buildAuthorityTools(briefing: BriefingResponse): Tool[] {
   const cancelScope =
     authority === 'commander'
       ? 'You can cancel any non-terminal objective on the squadron.'
-      : 'You can cancel objectives you originated (created). Attempting to cancel someone else\'s objective will be refused by the server.';
+      : "You can cancel objectives you originated (created). Attempting to cancel someone else's objective will be refused by the server.";
   tools.push({
     name: 'objectives_cancel',
     description:
@@ -344,7 +344,8 @@ function buildAuthorityTools(briefing: BriefingResponse): Tool[] {
         id: { type: 'string', description: 'The objective id.' },
         reason: {
           type: 'string',
-          description: 'Optional but strongly recommended — explain why the objective is being cancelled.',
+          description:
+            'Optional but strongly recommended — explain why the objective is being cancelled.',
         },
       },
       required: ['id'],
@@ -702,7 +703,9 @@ async function handleObjectivesCreate(
   return textResult(
     `created ${created.id} assigned to ${created.assignee}: ${created.title}\n` +
       `outcome: ${created.outcome}\n` +
-      (created.watchers.length > 0 ? `watchers: ${created.watchers.join(', ')}` : 'watchers: (none)'),
+      (created.watchers.length > 0
+        ? `watchers: ${created.watchers.join(', ')}`
+        : 'watchers: (none)'),
   );
 }
 
@@ -771,9 +774,7 @@ async function handleObjectivesReassign(
     to,
     ...(note ? { note } : {}),
   });
-  return textResult(
-    `reassigned ${updated.id} to ${updated.assignee}: ${updated.title}`,
-  );
+  return textResult(`reassigned ${updated.id} to ${updated.assignee}: ${updated.title}`);
 }
 
 function formatRecentLine(m: Message): string {

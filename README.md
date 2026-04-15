@@ -1,52 +1,112 @@
 # control17
 
-**MCP-based agent team control plane.** Define a team, give every
-member a callsign and a role, and push events to them in real time —
-no polling, no user prompt, no vendor lock-in.
+**MCP-based agent squadron control plane.** Define a squadron, give
+every slot a callsign + role + authority level, push-assign objectives
+to agents, and watch the LLM traces flow back to the operator in
+real time.
 
 > Early scaffolding. Not ready for use.
 
-## Two planes, one identity
+## What it is
 
-control17 distinguishes **machine** access (an MCP link subprocess
-feeding a Claude Code session) from **human** access (an operator
-opening the web UI in a browser). Both resolve to the same slot:
+control17 is a command-and-control plane for AI agent teams. It gives
+you three things working together:
+
+1. **Identity + chat** — slots with callsigns, DMs, broadcasts, a team
+   channel. Events arrive at agents as MCP `notifications/claude/channel`
+   with no polling and no user prompt.
+2. **Push-assigned objectives** — a structured work primitive with a
+   four-state lifecycle (`active → blocked → done | cancelled`), a
+   required outcome, threaded discussion, and tool descriptions that
+   refresh on every state change.
+3. **First-class LLM trace capture** — `c17 claude-code` spawns the
+   agent as a child of a SOCKS relay + TLS keylog tailer. At objective
+   close, the runner decrypts the flow with tshark, extracts the
+   Anthropic API shape (model, messages, tool_use, tool_result,
+   usage), redacts secrets, and uploads to the server for commander
+   review.
+
+The authority model is a three-tier hierarchy: **commander** (full
+squadron power), **lieutenant** (can create/cancel objectives they
+originated), **operator** (executes assigned work). Every endpoint
+enforces this server-side.
+
+## Process model
 
 ```
-Claude Code ──stdio──▶  link  ──HTTP bearer──▶  broker  ◀──HTTP cookie──  web UI (browser)
-                                                   │
-                                        one team · one identity model
+           operator terminal
+                  │
+                  ▼
+       ┌─────────────────────┐
+       │   c17 claude-code   │  ◀── the RUNNER: owns broker client,
+       │   (long-lived)      │      SSE subscription, objectives,
+       │                     │      trace host (SOCKS + keylog + buffer)
+       └──────────┬──────────┘
+                  │ spawns with ALL_PROXY / SSLKEYLOGFILE / NODE_OPTIONS
+                  │
+                  ▼
+       ┌─────────────────────┐
+       │     claude (CLI)    │  ◀── the AGENT: does the work
+       │                     │      spawns c17 mcp-bridge via .mcp.json
+       └──────────┬──────────┘
+                  │ stdio MCP
+                  │
+                  ▼
+       ┌─────────────────────┐
+       │   c17 mcp-bridge    │  ◀── THIN stdio relay, ~230 lines.
+       │                     │      Forwards MCP traffic over a
+       └──────────┬──────────┘      Unix socket to the runner.
+                  │ IPC (JSON over UDS)
+                  ▼
+          back to the runner
+                  │
+                  ▼ HTTP + SSE (bearer)
+              c17 broker
 ```
+
+- **Runner** (`c17 claude-code`) is the operator's entry point. It
+  fetches `/briefing`, binds an IPC socket, starts the SSE forwarder,
+  starts the trace host, backs up `.mcp.json`, spawns claude, and
+  cleans up on every exit path.
+- **Bridge** (`c17 mcp-bridge`, hidden verb) is the stdio MCP server
+  claude spawns via the `.mcp.json` entry the runner wrote. Stateless
+  — just shuttles JSON-RPC frames between stdio and the runner's
+  Unix socket.
+- **Broker** (`@control17/server`) is authoritative about the
+  squadron: mission, roles, slots + authority, objectives, traces.
+  Uses `@control17/core` under Hono + `node:sqlite` + SSE.
+
+## Two auth planes, one identity
+
+The broker serves humans (browser, TOTP + session cookie) and agents
+(runners, bearer token) over the same authorization layer. Both
+resolve to the same slot, so "commander ACTUAL posted to obj-X" and
+"obj-X received a discussion message from ACTUAL" are the same fact.
 
 - **Machine plane** — `Authorization: Bearer c17_…`. Tokens live in
-  the team config file (SHA-256 hashed on disk) and authenticate the
-  per-agent link subprocess.
+  the squadron config file (SHA-256 hashed on disk) and authenticate
+  the operator's `c17 claude-code` runner.
 - **Human plane** — `c17_session` cookie, minted after a TOTP login.
-  The `webPush` VAPID keys live in the same config file. Both planes
-  share the same slot identity model, so a "human-only" slot and a
-  "machine-only" slot look the same to the broker.
-
-Full diagram and component breakdown: [docs/architecture.md](./docs/architecture.md).
+  VAPID web-push keys live in the same config file. A single slot
+  can be used as either plane or both; the authority level applies
+  to everything the slot does on both planes.
 
 ## Web UI
 
-The broker serves a built-in Preact+Vite SPA at `/`. Operators sign
-in with a 6-digit TOTP code (no passwords, no reset flows), see the
-team channel and DM threads in real time over SSE, and can opt into
-Web Push notifications for DMs and high-severity broadcasts. The SPA
-is a PWA: installable from any Chromium/Firefox/Safari browser, with
-an offline shell cache.
+The broker serves a built-in Preact + Vite SPA at `/` — commander
+dashboard, objective detail with live discussion thread + lifecycle
+log + **captured LLM traces** (commander-only), roster, team channel,
+DM threads, Web Push support. PWA-installable on Chromium / Firefox
+/ Safari.
 
-- **Auth**: TOTP enrollment during the first-run wizard (or via
-  `c17 enroll --slot <callsign>`). Bearer tokens stay as the machine
-  credential and as the human recovery key.
-- **Session cookies**: `HttpOnly`, `SameSite=Strict`, `Secure` when
-  the server runs over HTTPS. 7-day sliding TTL.
-- **HTTP/2**: the HTTPS listener runs over HTTP/2 with HTTP/1.1 ALPN
-  fallback so SSE can multiplex — no browser 6-connection cap.
-- **Push notifications**: DMs always notify (unless you have a live
-  tab open); broadcasts notify on `level >= warning` or `@mention`.
-  VAPID keys are auto-generated on first boot.
+- **Login**: 6-digit TOTP, no passwords, no reset flows. Enroll at
+  setup time or via `c17 enroll --slot <callsign>`.
+- **Session**: `HttpOnly` / `SameSite=Strict` / `Secure` (when HTTPS).
+  7-day sliding TTL.
+- **HTTP/2**: the HTTPS listener speaks HTTP/2 with HTTP/1.1 ALPN
+  fallback so SSE doesn't hit the browser 6-connection cap.
+- **Push notifications**: DMs always notify (unless the tab is live);
+  broadcasts notify on `level >= warning` or `@mention`.
 
 ## Three deployment tiers
 
@@ -57,8 +117,8 @@ cd apps/server && node --env-file-if-exists=../../.env ./dist/index.js
 # → http://127.0.0.1:8717
 ```
 
-Plain HTTP, localhost-only bind. The browser treats `127.0.0.1` as a
-secure context, so PWA install and Web Push both work without a cert.
+Plain HTTP, localhost bind. `127.0.0.1` counts as a secure context,
+so PWA install + Web Push both work without a cert.
 
 ### 2. LAN / self-hosted
 
@@ -68,88 +128,68 @@ C17_HOST=0.0.0.0 node ./dist/index.js
 ```
 
 Binding to a non-loopback interface auto-flips the server into
-self-signed HTTPS mode. Certs are stored under the config directory
-(`<configDir>/certs/server.{crt,key}`, mode `0o600`) and reused
-across restarts. Clients get a one-time "not private" warning they
-click through; after that, PWA install and push both work.
+self-signed HTTPS mode. Certs live under `<configDir>/certs/server.{crt,key}`
+at `0o600` and persist across restarts. Browsers show a one-time
+warning you click through.
 
 **Safari iOS caveat:** Safari refuses service workers on self-signed
-certs. If you need the PWA on an iPhone, use tier 3 below.
+certs. If you need the PWA on an iPhone, use tier 3.
 
 ### 3. Public deployment via tunnel
 
-For a real cert without running ACME infrastructure, bring the
-server up in tier 1 or 2 and front it with:
+Bring the server up in tier 1 or 2 and front it with:
 
-- **Tailscale Funnel** — `tailscale funnel 8717` gives you a
-  `*.ts.net` cert with zero config. Recommended for small teams.
+- **Tailscale Funnel** — `tailscale funnel 8717` gives you a real
+  `*.ts.net` cert with zero config. Recommended for small squadrons.
 - **Cloudflare Tunnel** — `cloudflared tunnel run` routes a custom
-  domain through Cloudflare's edge. Good when you want a vanity URL.
+  domain through Cloudflare's edge.
 - **Reverse proxy (nginx / Caddy)** — terminate TLS upstream and
-  proxy to `http://127.0.0.1:8717`. Set `C17_HOST=127.0.0.1` and run
-  the server in plain-HTTP mode (`https.mode: "off"`).
+  proxy to `http://127.0.0.1:8717`.
 
-Full ACME/Let's Encrypt support is planned but deferred — the tunnel
-and reverse-proxy paths cover the real-world use cases today.
-
-## How it fits together
-
-```
-humans (browser)  ──HTTPS+cookie──┐
-                                  │
-agents (Claude)  ──stdio──▶  link ─┼──HTTP bearer──▶  broker  ──SSE──▶  (back out to subscribers)
-                                  │
-operators (CLI/SDK)  ──HTTP───────┘
-```
-
-- **broker** — `@control17/core` hosted by `@control17/server` (Node
-  + Hono + `node:sqlite`), authoritative about the team's mission,
-  roles, slots, and VAPID keys
-- **link** — a per-agent stdio MCP server that Claude Code spawns;
-  declares `claude/channel` and fetches `/briefing` at startup to
-  learn its callsign, role, team context, and teammates
-- **web** — Preact+Vite SPA built into the server's static dir, served
-  by Hono with SPA-fallback routing
-- **session** — events arrive at connected agents as
-  `<channel source="c17" thread="primary|dm" from="CALLSIGN" …>body</channel>`
-  and the model wakes and reacts in real time
+ACME / Let's Encrypt support is planned but deferred; the tunnel and
+reverse-proxy paths cover today's use cases.
 
 ## Install
 
-Pick what you need — or install the meta-package to get everything at once.
-
 ```bash
-# Everything (cli + link + server + tui + web + sdk + core)
+# Everything (cli + server + tui + web + sdk + core)
 npm install -g @control17/c17
 
-# Or just one role:
-npm install -g @control17/cli       # operator terminal
-npm install -g @control17/link      # Claude Code channel adapter
+# Or individual roles
+npm install -g @control17/cli       # operator terminal (includes `c17 claude-code`)
 npm install -g @control17/server    # self-hosted broker (includes the web UI)
 npm install -g @control17/tui       # interactive TUI (c17 connect consumes this)
 ```
 
-The web UI ships inside `@control17/server` as static assets — no
-extra install needed. Navigate to `http://<server>/` after the broker
-boots.
+The web UI ships inside `@control17/server` as static assets. After
+the broker boots, navigate to `http://<server>/`.
 
 ## Packages
 
 | Package | Role |
 |---|---|
-| `@control17/c17` | Meta-package — `npm install`s the full ecosystem in one step |
+| `@control17/c17` | Meta-package — `npm install`s the full ecosystem |
 | `@control17/sdk` | Wire contract + TypeScript client (subpath exports for types-only consumers) |
 | `@control17/core` | Runtime-agnostic broker logic — agent registry, push, SSE, event log |
-| `@control17/server` | Node broker (Hono + node:sqlite) with team config loader, first-run wizard, and the built-in web UI |
-| `@control17/web` | Preact+Vite+UnoCSS SPA served by the broker — team chat, roster, push notifications |
-| `@control17/link` | Per-agent stdio MCP channel server (spawned by Claude Code) |
+| `@control17/server` | Node broker (Hono + node:sqlite) with config loader, wizard, objectives store, trace upload endpoints, and the web UI |
+| `@control17/web` | Preact + Vite + UnoCSS SPA — team chat, roster, objectives, commander-only trace review |
 | `@control17/tui` | Ink-based terminal UI for `c17 connect` |
-| `@control17/cli` | Operator CLI (`c17 connect`, `c17 push`, `c17 roster`, `c17 serve`, `c17 link`) |
+| `@control17/cli` | Operator CLI: `c17 claude-code`, `c17 connect`, `c17 objectives`, `c17 push`, `c17 roster`, `c17 serve`, plus the internal `c17 mcp-bridge` |
+
+**Light install:** `@control17/cli` has `@control17/sdk` as its only
+hard dependency. `@control17/server` and `@control17/tui` are optional
+peers — subcommands dynamically import them and print an install
+hint if missing.
 
 ## Requirements
 
 - Node.js 22+
 - pnpm 10+
+- (Optional, for trace decryption) `tshark` — `apt install tshark` or
+  `brew install wireshark`. Without it, trace capture still works but
+  traces land with `status: 'tshark_missing'` and no decoded entries.
+- (Optional) `claude` on PATH or pointed to via `$CLAUDE_PATH`, if
+  you plan to run `c17 claude-code`.
 
 ## Getting started
 
@@ -159,28 +199,33 @@ pnpm build
 pnpm test
 ```
 
-To run a team locally:
+Run a squadron locally:
 
 ```bash
-# 1. First-run wizard: team + slots + TOTP enrollment. Writes
-#    ./control17.json at the repo root. Refuses to overwrite an
-#    existing config, so re-running is safe.
-#    (`pnpm setup` is a pnpm built-in; we use `pnpm wizard` instead.)
+# 1. First-run wizard: squadron + slots + authority + TOTP enrollment.
+#    Writes ./control17.json at the repo root with 0o600.
 pnpm wizard
 
-# 2. Watch-mode server + Vite dev for the web UI. The server picks
-#    up ./control17.json automatically; the Vite dev server on
-#    :5173 proxies API calls to the broker on :8717.
+# 2. Watch-mode server + Vite dev. The server picks up ./control17.json
+#    automatically; Vite on :5173 proxies API calls to :8717.
 pnpm dev
 
-# 3. Open the web UI. Log in with the operator callsign + a fresh
-#    6-digit code from the authenticator app you enrolled during setup.
+# 3. Open the web UI. Log in with your slot callsign + a fresh 6-digit
+#    TOTP code from your authenticator app.
 open http://127.0.0.1:5173
 
-# (Optional) join the net as an operator from the terminal instead
+# 4. Wrap a claude session with the runner. Trace capture on by default
+#    — use --no-trace to disable. Use --doctor to preflight-check the
+#    environment (claude binary, tshark, $TMPDIR, SOCKS bindability).
 export C17_TOKEN=c17_your_slot_token
-node packages/cli/dist/index.js connect
+c17 claude-code --doctor
+c17 claude-code
 ```
+
+Full docs: [docs/architecture.md](./docs/architecture.md),
+[docs/getting-started.mdx](./docs/getting-started.mdx),
+[docs/concepts/objectives.mdx](./docs/concepts/objectives.mdx),
+[docs/tracing.mdx](./docs/tracing.mdx).
 
 ## License
 

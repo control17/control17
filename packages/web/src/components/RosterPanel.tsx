@@ -30,38 +30,34 @@ export function RosterPanel({ viewer }: RosterPanelProps) {
   const r = roster.value;
   const b = briefing.value;
   if (!r) {
-    return (
-      <div class="flex-1 flex items-center justify-center text-brand-muted text-sm">
-        loading roster…
-      </div>
-    );
+    return <div class="flex-1 flex items-center justify-center c17-label">━━ Loading roster…</div>;
   }
   const connectedByCallsign = new Map<string, Agent>(r.connected.map((a) => [a.agentId, a]));
 
   return (
-    <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
+    <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
       {/* Mission header — mirrors the sidebar team block so context
           stays visible when the user navigates from the sidebar shortcut
           into the full roster view. */}
       {b && (
-        <div class="mb-5 pb-4 border-b border-brand-border">
-          <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-1">Team</div>
-          <div class="text-lg font-bold text-brand-text">{b.squadron.name}</div>
+        <div class="mb-6 pb-5 border-b border-brand-border-subtle">
+          <div class="c17-label text-brand-primary mb-2">━━ Squadron</div>
+          <div class="c17-panel-title !text-2xl">{b.squadron.name}</div>
           {b.squadron.mission && (
-            <div class="text-sm text-brand-muted mt-1 leading-snug">{b.squadron.mission}</div>
+            <div class="text-sm text-brand-text mt-3 leading-relaxed font-medium">
+              {b.squadron.mission}
+            </div>
           )}
           {b.squadron.brief && (
-            <div class="text-xs text-brand-muted mt-2 leading-snug whitespace-pre-wrap">
+            <div class="text-xs text-brand-muted mt-2 leading-relaxed font-medium whitespace-pre-wrap">
               {b.squadron.brief}
             </div>
           )}
         </div>
       )}
 
-      <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-3">
-        Team roster — click a teammate to DM
-      </div>
-      <ul class="space-y-1">
+      <div class="c17-label text-brand-subtle mb-4">━━ Roster · click a teammate to DM</div>
+      <ul class="space-y-0">
         {r.teammates.map((t) => {
           const conn = connectedByCallsign.get(t.callsign);
           const online = (conn?.connected ?? 0) > 0;
@@ -71,12 +67,24 @@ export function RosterPanel({ viewer }: RosterPanelProps) {
           const rowContent = (
             <>
               <div class="flex items-center gap-3 min-w-0">
-                <span class={`${colorClass} font-semibold`}>{t.callsign}</span>
-                {isSelf && <span class="text-[10px] text-brand-muted">(you)</span>}
-                <span class="text-brand-muted text-xs">{t.role}</span>
+                <span
+                  class={`${colorClass} font-display font-bold uppercase tracking-tight text-sm leading-none`}
+                >
+                  {t.callsign}
+                </span>
+                {isSelf && (
+                  <span class="font-display font-semibold uppercase tracking-widest text-[10px] text-brand-subtle leading-none">
+                    (you)
+                  </span>
+                )}
+                <span class="font-display font-medium uppercase tracking-wide text-xs text-brand-subtle leading-none">
+                  {t.role}
+                </span>
               </div>
-              <span class={`text-xs ${online ? 'text-brand-primary' : 'text-brand-muted'}`}>
-                {online ? `◈ online (${conn?.connected})` : '◇ offline'}
+              <span
+                class={`font-display font-semibold uppercase tracking-wider text-xs leading-none ${online ? 'text-brand-ok' : 'text-brand-subtle'}`}
+              >
+                {online ? `● ON NET · ${conn?.connected}` : '◇ OFF NET'}
               </span>
             </>
           );
@@ -89,7 +97,7 @@ export function RosterPanel({ viewer }: RosterPanelProps) {
             return (
               <li
                 key={t.callsign}
-                class="flex items-center justify-between border-b border-brand-border/50 py-1.5 px-2"
+                class="flex items-center justify-between border-b border-brand-border-subtle py-3 px-3"
               >
                 {rowContent}
               </li>
@@ -97,11 +105,11 @@ export function RosterPanel({ viewer }: RosterPanelProps) {
           }
 
           return (
-            <li key={t.callsign} class="border-b border-brand-border/50">
+            <li key={t.callsign} class="border-b border-brand-border-subtle">
               <button
                 type="button"
                 onClick={() => selectDmWith(t.callsign)}
-                class="w-full flex items-center justify-between py-1.5 px-2 rounded hover:bg-brand-bg/40 focus:outline-none focus:bg-brand-bg/60 focus:ring-1 focus:ring-brand-primary/40 transition-colors"
+                class="w-full flex items-center justify-between py-3 px-3 hover:bg-brand-surface/60 focus:outline-none focus:bg-brand-primary-faint focus:ring-1 focus:ring-brand-primary/40 transition-colors"
                 aria-label={`Message ${t.callsign}`}
               >
                 {rowContent}

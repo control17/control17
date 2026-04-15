@@ -20,7 +20,8 @@
     "clean": "turbo run clean && rm -rf node_modules .turbo",
     "bump": "node scripts/bump-version.mjs",
     "release": "pnpm build && pnpm -r publish --access public --no-git-checks",
-    "wizard": "node packages/cli/dist/index.js setup"
+    "wizard": "node packages/cli/dist/index.js setup",
+    "c17": "node packages/cli/dist/index.js"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

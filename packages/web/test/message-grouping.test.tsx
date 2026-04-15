@@ -97,7 +97,7 @@ describe('<MessageLine /> rendering modes', () => {
     // Timestamp element — any HH:MM format. Just check for a digit pair.
     expect(container.textContent).toMatch(/\d\d:\d\d/);
     // No top margin on the first message of a thread.
-    expect(container.firstElementChild?.className).not.toMatch(/\bmt-2\b/);
+    expect(container.firstElementChild?.className).not.toMatch(/\bmt-3\b/);
   });
 
   it('renders a continuation (timestamp kept, sender hidden) when previous is same sender within window', () => {
@@ -111,7 +111,7 @@ describe('<MessageLine /> rendering modes', () => {
     // Timestamp IS rendered — per-row timing is load-bearing info.
     expect(container.textContent).toMatch(/\d\d:\d\d/);
     // No top margin (continuations stay tight).
-    expect(container.firstElementChild?.className).not.toMatch(/\bmt-2\b/);
+    expect(container.firstElementChild?.className).not.toMatch(/\bmt-3\b/);
   });
 
   it('continuation timestamp reflects the continuation message, not the header', () => {
@@ -143,8 +143,8 @@ describe('<MessageLine /> rendering modes', () => {
     // New sender shown.
     expect(container.textContent).toMatch(/test-agent-1/);
     expect(container.textContent).not.toMatch(/przy-1/);
-    // mt-2 applied since this is a new group after an earlier one.
-    expect(container.firstElementChild?.className).toMatch(/\bmt-2\b/);
+    // mt-2 applied after an earlier one.
+    expect(container.firstElementChild?.className).toMatch(/\bmt-3\b/);
   });
 
   it('renders a new header when the time gap is too large even with same sender', () => {

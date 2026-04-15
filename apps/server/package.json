@@ -54,7 +54,6 @@
     "@control17/core": "workspace:*",
     "@control17/sdk": "workspace:*",
     "@hono/node-server": "^1.19.14",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "hono": "^4.12.12",
     "otpauth": "^9.5.0",
     "p-limit": "^7.1.1",
@@ -64,7 +63,6 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@control17/link": "workspace:*",
     "@control17/web": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/qrcode-terminal": "^0.12.2",

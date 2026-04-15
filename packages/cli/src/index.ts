@@ -8,18 +8,27 @@
  *   c17 push    — push an event to a teammate or broadcast
  *   c17 roster  — list slots and connection state
  *   c17 serve   — run a local broker (optional peer: @control17/server)
- *   c17 link    — run the stdio MCP channel link (optional peer: @control17/link)
  *
  * Global env vars (defaults):
  *   C17_URL       = http://127.0.0.1:8717
- *   C17_TOKEN     (required for connect/push/roster/link)
+ *   C17_TOKEN     (required for connect/push/roster)
+ *
+ * Note: the former `c17 link` verb has been retired as part of the
+ * runner/bridge refactor. The runner is being rebuilt in subsequent
+ * phases as `c17 claude-code` (and other agent-framework verbs), with
+ * `c17 mcp-bridge` as a thin internal relay that agents spawn via
+ * `.mcp.json`. See `/home/aprzy/.claude/plans/runner-bridge-trace.md`.
  */
 
 import { Client } from '@control17/sdk/client';
 import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 import { parseDataFlag, parseSubcommandArgs } from './args.js';
+import {
+  UsageError as ClaudeCodeUsageError,
+  runClaudeCodeCommand,
+} from './commands/claude-code.js';
+import { formatReport, runDoctor } from './commands/doctor.js';
 import { runEnrollCommand } from './commands/enroll.js';
-import { runLinkCommand } from './commands/link.js';
 import { runObjectivesCommand } from './commands/objectives.js';
 import { type PushCommandInput, runPushCommand, UsageError } from './commands/push.js';
 import { runRosterCommand } from './commands/roster.js';
@@ -33,11 +42,11 @@ usage:
   c17 setup       [--config-path <path>]            first-run wizard (squadron + slots + TOTP)
   c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
   c17 connect                       interactive TUI — join the squadron net
+  c17 claude-code [--no-trace] [--doctor] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
   c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
   c17 roster                        list slots, authority, and connection state
   c17 objectives  list|view|create|update|complete|cancel|reassign   squadron objectives
   c17 serve       [--config-path <path>] [--port <n>] [--host <h>] [--db <path>]
-  c17 link        (configured via C17_URL / C17_TOKEN env vars)
 
 global options (or via env):
   --url <url>       broker base URL (env: ${ENV.url}, default: http://127.0.0.1:${DEFAULT_PORT})
@@ -110,8 +119,11 @@ async function main(): Promise<void> {
     case 'serve':
       await handleServe(rest);
       return;
-    case 'link':
-      await handleLink(rest);
+    case 'mcp-bridge':
+      await handleMcpBridge(rest);
+      return;
+    case 'claude-code':
+      await handleClaudeCode(rest);
       return;
     default:
       process.stderr.write(USAGE);
@@ -353,24 +365,101 @@ async function handleObjectives(args: string[]): Promise<void> {
   }
 }
 
-async function handleLink(args: string[]): Promise<void> {
-  // The link has no CLI flags of its own — it reads env vars directly.
-  // Parse the rest so `-h/--help` works, but no other options are accepted.
-  const { values } = parseSubcommandArgs(args, {
-    help: { type: 'boolean', short: 'h' },
-  });
-  if (values.help === true) {
-    process.stdout.write(USAGE);
-    return;
+/**
+ * `c17 claude-code` — spawn claude-code as a child of a c17 runner.
+ *
+ * Arg handling is a little custom: we accept `--url` and `--token` as
+ * c17 knobs (with env fallback), then everything after a literal `--`
+ * is forwarded verbatim to claude. Without a `--`, any unrecognized
+ * args also flow through to claude, so `c17 claude-code --model opus`
+ * works the same as `c17 claude-code -- --model opus`.
+ */
+async function handleClaudeCode(args: string[]): Promise<void> {
+  let url: string | undefined;
+  let token: string | undefined;
+  let noTrace = false;
+  let doctor = false;
+  const claudeArgs: string[] = [];
+  let seenDashDash = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) continue;
+    if (seenDashDash) {
+      claudeArgs.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      seenDashDash = true;
+      continue;
+    }
+    if (arg === '-h' || arg === '--help') {
+      process.stdout.write(USAGE);
+      return;
+    }
+    if (arg === '--no-trace') {
+      noTrace = true;
+      continue;
+    }
+    if (arg === '--doctor') {
+      doctor = true;
+      continue;
+    }
+    if (arg === '--url' || arg === '--token') {
+      const next = args[i + 1];
+      if (next === undefined) {
+        fail(`${arg} requires a value`, 2);
+      }
+      if (arg === '--url') url = next as string;
+      else token = next as string;
+      i++;
+      continue;
+    }
+    // Anything else we don't recognize flows to claude. This lets
+    // `c17 claude-code --model opus` work the same as with a `--`.
+    claudeArgs.push(arg);
+  }
+
+  if (doctor) {
+    const report = await runDoctor();
+    log(formatReport(report));
+    process.exit(report.anyFail ? 1 : 0);
   }
 
   try {
-    await runLinkCommand();
+    const code = await runClaudeCodeCommand({ url, token, claudeArgs, noTrace });
+    process.exit(code);
   } catch (err) {
-    if (err instanceof (await import('./commands/link.js')).UsageError) {
+    if (err instanceof ClaudeCodeUsageError) {
       fail(err.message, 2);
     }
     fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/**
+ * `c17 mcp-bridge` — internal verb spawned by agents via `.mcp.json`.
+ *
+ * Hidden from the top-level `--help` usage because operators never
+ * invoke it directly; the `c17 claude-code` runner generates the
+ * `.mcp.json` entry that points here. If an operator does run it by
+ * hand, the bridge will immediately error out with "C17_RUNNER_SOCKET
+ * is required" which is the closest thing we can give them to a
+ * useful message.
+ */
+async function handleMcpBridge(_args: string[]): Promise<void> {
+  // The bridge ignores args entirely — it reads config only from
+  // env vars (`C17_RUNNER_SOCKET`) and stdio. The `_args` param is
+  // kept to match the subcommand handler shape.
+  const bridgeModule = await import('./runtime/bridge.js');
+  try {
+    await bridgeModule.runBridge();
+  } catch (err) {
+    if (err instanceof bridgeModule.BridgeStartupError) {
+      process.stderr.write(`c17 mcp-bridge: ${err.message}\n`);
+      process.exit(1);
+    }
+    throw err;
   }
 }
 

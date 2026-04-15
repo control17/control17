@@ -1,0 +1,159 @@
+---
+title: Objectives
+description: The push-assigned work primitive — four states, one assignee, required outcome, threaded discussion, and a built-in trace capture span.
+section: Concepts
+order: 30
+---
+
+# Objectives
+
+Objectives are control17's structured work primitive. They replace
+ad-hoc chat pushes for anything that needs a lifecycle: a bug to
+fix, a feature to ship, an investigation to run, a migration to
+execute.
+
+An objective is:
+
+- **Push-assigned** — a commander or lieutenant creates it and
+  atomically assigns it to exactly one slot. There's no unclaimed
+  queue and no claim verb; work starts the moment someone is named.
+- **Outcome-required** — every objective has a non-empty `outcome`
+  field set at creation time. It's the tangible definition of done
+  and it appears in the agent's tool descriptions on every turn, so
+  the acceptance criteria are sticky across compaction.
+- **Four-state** — `active → blocked → done | cancelled`. `done`
+  and `cancelled` are terminal; `active ↔ blocked` is the only
+  round-trip. The store enforces every transition.
+- **Threaded** — each objective gets a discussion thread at
+  `obj:<id>`. Members are the originator, the assignee, all
+  commanders, and explicit watchers. Discussion posts fan out via
+  the normal channel path.
+- **Audited** — every state change writes to an append-only
+  `objective_events` table in the same transaction. Event kinds:
+  `assigned | blocked | unblocked | completed | cancelled |
+  reassigned | watcher_added | watcher_removed`.
+
+## Creating an objective
+
+From the CLI:
+
+```bash
+c17 objectives create \
+  --assignee ALPHA-1 \
+  --title "Pull main and run smoke tests" \
+  --outcome "Smoke tests green on latest main" \
+  --body "See CI failure on #1234 for context"
+```
+
+From the web UI: click "New objective" on the commander dashboard.
+
+From an agent (only works for lieutenants+): call the
+`objectives_create` MCP tool.
+
+Authority check: the originator must be `lieutenant` or `commander`.
+Operators get 403 on create.
+
+## Working an objective
+
+Once assigned, the agent sees:
+
+1. A new channel event on `obj:<id>` announcing the assignment
+2. A `notifications/tools/list_changed` notification — the next
+   `tools/list` will show the new objective in the descriptions
+3. A new **trace capture span** opened for the objective on the
+   runner side (see [tracing](../tracing.mdx))
+
+The agent drives the work using the objectives tools:
+
+- `objectives_list` — list open objectives assigned to the caller
+- `objectives_view` — full detail + event history for one objective
+- `objectives_update` — change status (`active ↔ blocked`) and/or
+  post a block reason
+- `objectives_discuss` — post a discussion message on the
+  `obj:<id>` thread
+- `objectives_complete` — transition to `done` with a required
+  `result` string (what was actually delivered)
+- `objectives_cancel` — transition to `cancelled` with optional
+  reason (originator-lieutenant or commander only)
+
+Each of these is a normal MCP tool call that the bridge forwards to
+the runner, which makes the HTTP call against `/objectives/*`.
+
+## Reassignment
+
+Commanders can reassign an open objective to a different slot:
+
+```bash
+c17 objectives reassign --id obj-xxx --to BRAVO-2 --note "alpha-1 is OOO"
+```
+
+Reassignment:
+
+- Appends a `reassigned` audit event
+- Fans out a channel event to both old and new assignees
+- Closes the trace span for the old assignee (whatever was captured
+  so far goes into their span snapshot)
+- Opens a new trace span for the new assignee
+- Flips who's allowed to upload traces for the objective — the old
+  assignee gets 403 if they try to upload a trace after being
+  reassigned
+
+## Watchers
+
+A watcher is a callsign explicitly added to an objective's
+discussion thread. Watchers:
+
+- Receive every lifecycle event on their SSE stream
+- Receive every discussion post on their SSE stream
+- Do NOT become the assignee and cannot complete the objective
+- Do NOT automatically become commanders — they still hit the
+  normal authority checks for trace viewing, reassignment, etc.
+
+Add/remove watchers via `objectives_watchers` (commander or
+originating lieutenant only).
+
+## Completing an objective
+
+Only the current assignee can complete an objective:
+
+```bash
+c17 objectives complete --id obj-xxx --result "Smoke tests passing on main; root cause was flaky integration test, see PR #1245"
+```
+
+The `result` field is required and becomes part of the audit log.
+It's the "what was actually delivered" summary a commander reads
+when reviewing the objective later.
+
+Completion closes the trace span, which kicks off decrypt + upload
+in the background. Once the upload lands, commanders can review
+the full LLM trace for the work via the web UI's TracePanel on
+the objective detail page.
+
+## The discussion thread
+
+The `obj:<id>` thread is a first-class chat thread. Members see
+everything that happens on the objective as channel events — both
+lifecycle events (assigned/blocked/completed) and ordinary
+discussion posts.
+
+The web UI renders the discussion thread inline on the objective
+detail page with a live composer for members. Agents reach it via
+the `objectives_discuss` tool.
+
+Discussion posts do NOT appear in the lifecycle event log — those
+are two different streams. The lifecycle log is strictly auditable
+state transitions; discussion is freeform conversation.
+
+## Why one primitive for everything
+
+Earlier drafts of control17 had "tasks" and "objectives" and
+"directives" as separate primitives. We collapsed them into one
+primitive with a single lifecycle for a pragmatic reason: the
+commander's dashboard is clearer with one list sorted by status,
+and agents don't need to learn three overlapping vocabularies.
+
+The cost is that "quick one-shot asks" go through the same
+heavyweight path as "ship the payment service." The benefit is that
+every unit of assigned work has an outcome, a lifecycle, an audit
+log, and a captured trace — which is exactly what you need for
+commander review later.

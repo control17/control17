@@ -1,0 +1,322 @@
+/*
+ * control17 web — brand stylesheet
+ * --------------------------------------------------------------------
+ * Source of truth for the brand system on the OSS web SPA. Mirrors the
+ * canonical design system defined in platform/docs/brand-guide.html.
+ *
+ * What this file covers:
+ *   - Loading the two brand typefaces (Barlow Condensed + IBM Plex Mono)
+ *   - CSS custom properties for brand tokens (for inline styles / non-Uno sites)
+ *   - Base body / html typography defaults (medium weight, relaxed leading)
+ *   - Heading rules (display face, uppercase, bold)
+ *   - Themed scrollbars
+ *   - Utility classes for patterns that don't fit cleanly in utilities
+ *     (.c17-eyebrow, .c17-label)
+ *
+ * What lives elsewhere:
+ *   - Color tokens as Uno theme values live in `uno.config.ts`
+ *     (so `text-brand-primary`, `bg-brand-surface`, etc. keep working)
+ *   - Component styling stays in component className props
+ */
+
+/* ─── Typography — Barlow Condensed (display) + IBM Plex Mono (body) ───── */
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap");
+
+/* ─── CSS custom properties (parity with platform/packages/ui) ──────── */
+:root {
+  /* Surfaces — near-black with faint OD-green undertone */
+  --c17-bg: #0b0d0c;
+  --c17-bg-inset: #070908;
+  --c17-surface: #141817;
+  --c17-surface-raised: #1c2120;
+  --c17-surface-hover: #232827;
+
+  /* Borders — green-tinted grays */
+  --c17-border-subtle: #1a1e1d;
+  --c17-border: #2a312f;
+  --c17-border-strong: #3a423f;
+
+  /* Foreground — slight warm shift from pure gray */
+  --c17-text: #e8ebe8;
+  --c17-text-muted: #9da299;
+  --c17-text-subtle: #6e736e;
+  --c17-text-faint: #444a47;
+
+  /* Primary — OSS-anchored olive drab (#5F875F) */
+  --c17-primary: #5f875f;
+  --c17-primary-bright: #7ba67b;
+  --c17-primary-dim: #425d42;
+  --c17-primary-deep: #2b3e2b;
+  --c17-primary-faint: rgba(95, 135, 95, 0.12);
+  --c17-on-primary: #0b0d0c;
+
+  /* Secondary — coyote tan (#C19A6B) */
+  --c17-coyote: #c19a6b;
+  --c17-coyote-bright: #d5ae7e;
+  --c17-coyote-dim: #8a6b4a;
+  --c17-coyote-faint: rgba(193, 154, 107, 0.12);
+
+  /* Semantic */
+  --c17-ok: #5f875f;
+  --c17-warn: #c19a6b;
+  --c17-err: #a84a42;
+  --c17-info: #6b8691;
+
+  /* Type families */
+  --c17-font-body:
+    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --c17-font-display:
+    "Barlow Condensed", "Oswald", "Helvetica Neue Condensed", "Arial Narrow", "Roboto Condensed",
+    sans-serif;
+}
+
+/* ─── Base typography — applied globally ───────────────────────────── */
+html {
+  font-family: var(--c17-font-body);
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--c17-font-body);
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--c17-text);
+  background: var(--c17-bg);
+}
+
+/* Headings — Barlow Condensed bold uppercase, aircraft-livery style */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--c17-font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  color: var(--c17-text);
+}
+
+/* Inline code — OD green bright on inset bg */
+code:not(pre code),
+kbd,
+samp {
+  font-family: var(--c17-font-body);
+  font-size: 0.92em;
+  font-weight: 600;
+  background: var(--c17-bg-inset);
+  border: 1px solid var(--c17-border-subtle);
+  border-radius: 2px;
+  padding: 0.1em 0.35em;
+  color: var(--c17-primary-bright);
+}
+
+pre {
+  font-family: var(--c17-font-body);
+  font-weight: 500;
+}
+
+/* ─── Themed scrollbars — match brand palette so overflow regions
+       (transcript, sidebar, roster) blend into the dark surface
+       instead of showing the OS default light track ───────────────── */
+:root {
+  scrollbar-color: var(--c17-border) transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c17-border);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--c17-border-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ─── Focus ring — OD green, matches accent, AA+ contrast ──────────── */
+:focus-visible {
+  outline: 2px solid var(--c17-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ─── Utility classes — patterns that don't fit a single utility ──── */
+
+/*
+ * Eyebrow — the signature tactical label that appears above sections,
+ * status clusters, and panels. Prefix glyph is a box-drawing heavy
+ * horizontal (━━) to evoke the technical-document header style.
+ *
+ * Usage:
+ *   <p class="c17-eyebrow">INCOMING EVENT</p>
+ *
+ * For coyote-colored advisories:
+ *   <p class="c17-eyebrow c17-eyebrow-warn">ADVISORY</p>
+ */
+.c17-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--c17-font-display);
+  font-size: 0.875rem; /* 14 */
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c17-primary);
+  line-height: 1;
+}
+
+.c17-eyebrow::before {
+  content: "━━";
+  color: var(--c17-primary-dim);
+  letter-spacing: 0;
+}
+
+.c17-eyebrow-warn {
+  color: var(--c17-coyote);
+}
+
+.c17-eyebrow-warn::before {
+  color: var(--c17-coyote-dim);
+}
+
+.c17-eyebrow-err {
+  color: var(--c17-err);
+}
+
+.c17-eyebrow-err::before {
+  color: var(--c17-err);
+  opacity: 0.6;
+}
+
+/*
+ * Tactical label — smaller inline stencil-style label for chrome,
+ * form labels, status pills, metadata rows.
+ */
+.c17-label {
+  font-family: var(--c17-font-display);
+  font-size: 0.75rem; /* 12 */
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c17-text-subtle);
+  line-height: 1.1;
+}
+
+/*
+ * Display headline — when you want an element to read as aircraft-livery
+ * without being an h1-h6 (e.g. inside a card or a dashboard widget).
+ */
+.c17-headline {
+  font-family: var(--c17-font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 0.95;
+}
+
+/*
+ * Status indicator — aligned glyph + label pair, as used in the TUI header.
+ *
+ *   <span class="c17-status c17-status-ok">● ON NET</span>
+ *   <span class="c17-status c17-status-warn">◆ STANDBY</span>
+ *   <span class="c17-status c17-status-err">◇ OFF NET</span>
+ */
+.c17-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--c17-font-display);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c17-text-subtle);
+  line-height: 1;
+}
+
+.c17-status-ok {
+  color: var(--c17-primary);
+}
+.c17-status-warn {
+  color: var(--c17-coyote);
+}
+.c17-status-err {
+  color: var(--c17-err);
+}
+
+/*
+ * Pulsing indicator dot — used inside status labels and eyebrows for
+ * "live / active" states. 2s linear pulse, opacity only (no scale).
+ */
+.c17-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: c17-pulse 2s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes c17-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/*
+ * Prose block — for server-rendered markdown (message bodies, objective
+ * descriptions) that sits inside a component and needs comfortable reading.
+ */
+.c17-prose {
+  color: var(--c17-text);
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  font-weight: 500;
+}
+
+.c17-prose a {
+  color: var(--c17-primary-bright);
+  border-bottom: 1px solid var(--c17-primary-dim);
+  text-decoration: none;
+  transition: border-color 100ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.c17-prose a:hover {
+  border-bottom-color: var(--c17-primary);
+}
+
+.c17-prose strong {
+  color: var(--c17-text);
+  font-weight: 700;
+}
+
+.c17-prose blockquote {
+  border-left: 2px solid var(--c17-primary);
+  padding-left: 1rem;
+  color: var(--c17-text-muted);
+  margin-block: 1rem;
+}

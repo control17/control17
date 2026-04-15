@@ -322,3 +322,108 @@ export interface ListObjectivesQuery {
   assignee?: string;
   status?: ObjectiveStatus;
 }
+
+/**
+ * Trace capture — one structured trace entry recovered from the wire
+ * via the runner's SOCKS relay + TLS keylog + tshark pipeline. Each
+ * entry is a single HTTP exchange the agent made while working on an
+ * objective. Anthropic `/v1/messages` calls are parsed into a typed
+ * shape; everything else is kept opaque with headers + body preview.
+ */
+export type TraceEntry = AnthropicMessagesEntry | OpaqueHttpEntry;
+
+export interface AnthropicMessagesEntry {
+  kind: 'anthropic_messages';
+  startedAt: number;
+  endedAt: number;
+  request: {
+    model: string | null;
+    maxTokens: number | null;
+    temperature: number | null;
+    system: string | null;
+    messages: AnthropicMessage[];
+    tools: AnthropicTool[] | null;
+  };
+  response: {
+    stopReason: string | null;
+    stopSequence: string | null;
+    messages: AnthropicMessage[];
+    usage: AnthropicUsage | null;
+    status: number | null;
+  } | null;
+}
+
+export interface AnthropicMessage {
+  role: string;
+  content: AnthropicContentBlock[];
+}
+
+export type AnthropicContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; toolUseId: string; content: unknown; isError: boolean }
+  | { type: 'image'; mediaType: string | null }
+  | { type: 'thinking'; text: string }
+  | { type: 'unknown'; raw: unknown };
+
+export interface AnthropicTool {
+  name: string;
+  description: string | null;
+  inputSchema: unknown;
+}
+
+export interface AnthropicUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheCreationInputTokens: number | null;
+  cacheReadInputTokens: number | null;
+}
+
+export interface OpaqueHttpEntry {
+  kind: 'opaque_http';
+  startedAt: number;
+  endedAt: number;
+  host: string;
+  method: string;
+  url: string;
+  status: number | null;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+  requestBodyPreview: string | null;
+  responseBodyPreview: string | null;
+}
+
+/**
+ * One complete trace — a collection of HTTP exchanges the runner
+ * captured between span open and span close on an objective. The
+ * `provider` field identifies which LLM provider dominated the
+ * traffic (`anthropic` today; other providers land here in future
+ * milestones). `truncated` indicates the per-span byte cap kicked in.
+ */
+export interface ObjectiveTrace {
+  id: number;
+  objectiveId: string;
+  spanStart: number;
+  spanEnd: number;
+  provider: string;
+  entries: TraceEntry[];
+  truncated: boolean;
+  createdAt: number;
+}
+
+/**
+ * Upload payload for `POST /objectives/:id/traces`. The runner sends
+ * this at span close with whatever decrypted entries tshark was able
+ * to recover. The server stamps `id` and `createdAt`.
+ */
+export interface UploadObjectiveTraceRequest {
+  spanStart: number;
+  spanEnd: number;
+  provider: string;
+  entries: TraceEntry[];
+  truncated: boolean;
+}
+
+export interface ListObjectiveTracesResponse {
+  traces: ObjectiveTrace[];
+}

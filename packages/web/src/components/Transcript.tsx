@@ -54,7 +54,7 @@ export function Transcript({ viewer }: TranscriptProps) {
     <div
       ref={containerRef}
       onScroll={onScroll}
-      class="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-0.5 bg-brand-bg"
+      class="flex-1 overflow-y-auto px-3 sm:px-5 py-4 space-y-0.5 bg-brand-bg"
     >
       {messages.length === 0 ? (
         <EmptyState threadKey={threadKey} />
@@ -79,15 +79,16 @@ export function Transcript({ viewer }: TranscriptProps) {
  */
 function EmptyState({ threadKey }: { threadKey: string }) {
   if (threadKey === PRIMARY_THREAD) {
-    return <div class="text-brand-muted text-sm text-center py-8">net is quiet</div>;
+    return <div class="c17-label text-brand-subtle text-center py-10">◇ Net is quiet</div>;
   }
   const other = dmOther(threadKey);
   if (other !== null && other !== 'self') {
     return (
-      <div class="text-brand-muted text-sm text-center py-8">
-        no messages yet with <span class="text-brand-text">@{other}</span> — send one below to start
+      <div class="c17-label text-brand-subtle text-center py-10">
+        ◇ No messages yet with <span class="text-brand-primary-bright">@{other}</span> — send one
+        below to start
       </div>
     );
   }
-  return <div class="text-brand-muted text-sm text-center py-8">no messages yet</div>;
+  return <div class="c17-label text-brand-subtle text-center py-10">◇ No messages yet</div>;
 }

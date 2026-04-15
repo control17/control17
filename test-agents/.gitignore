@@ -1,0 +1,9 @@
+# Everything in this directory is scratch space for development —
+# test agent workspaces, captured `.mcp.json` backups, token files,
+# etc. Keep the repo clean by ignoring it all by default and only
+# tracking the README + the CLAUDE.md guard below.
+
+*
+!.gitignore
+!README.md
+!CLAUDE.md

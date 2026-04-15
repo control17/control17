@@ -26,8 +26,8 @@ export function Header() {
   const drawerOpen = isSidebarOpen.value;
 
   return (
-    <header class="flex items-center justify-between border-b border-brand-border px-3 sm:px-4 py-2 bg-brand-surface flex-shrink-0 relative z-50 gap-2">
-      <div class="flex items-center gap-2 sm:gap-3 min-w-0">
+    <header class="flex items-center justify-between border-b border-brand-border-subtle px-3 sm:px-5 py-3 bg-brand-surface flex-shrink-0 relative z-50 gap-2">
+      <div class="flex items-center gap-3 sm:gap-4 min-w-0">
         {/* Hamburger — only visible below md, where the sidebar is
             an overlay drawer. aria-expanded reflects the drawer state
             so screen readers announce the toggle correctly. */}
@@ -52,39 +52,50 @@ export function Header() {
         </button>
         <svg
           viewBox="95 70 335 210"
-          class="h-5 w-auto text-brand-primary flex-shrink-0"
+          class="h-6 w-auto text-brand-primary flex-shrink-0"
           fill="currentColor"
           aria-label="control17"
           role="img"
         >
           <path d={LOGO_PATH} />
         </svg>
-        <span class="text-brand-text font-semibold truncate">{s.slot}</span>
+        {/* Vertical divider — 1px separator that matches the logo lockup
+            in the marketing header, keeps the mark visually distinct
+            from the identity cluster. */}
+        <span class="hidden sm:block w-px h-5 bg-brand-border-strong" aria-hidden="true" />
+        <span class="font-display font-bold uppercase tracking-tight text-brand-text text-lg leading-none truncate">
+          {s.slot}
+        </span>
         {/* Rank + squadron name are secondary context — drop them
             below sm where every pixel matters. Rank (authority) is
             shown rather than role because it's the load-bearing
             identity axis for command authority. Role lives in the
             Overview / Roster panel for anyone who needs it. */}
-        <span class="hidden sm:inline text-brand-muted text-xs">{s.authority}</span>
+        <span class="hidden sm:inline font-display font-semibold uppercase tracking-wider text-xs text-brand-subtle leading-none">
+          {s.authority}
+        </span>
         {b && (
-          <span class="hidden sm:inline text-brand-muted text-xs truncate">
+          <span class="hidden md:inline font-display font-medium uppercase tracking-wide text-xs text-brand-subtle leading-none truncate">
             · {b.squadron.name}
           </span>
         )}
       </div>
-      <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+      <div class="flex items-center gap-3 sm:gap-4 flex-shrink-0">
         <NotificationToggle />
         {/* Connection indicator: icon-only below sm, full label at sm+.
             The title attribute still surfaces the state on hover for
-            desktop + assistive tech. */}
+            desktop + assistive tech. Uses the tactical glyph convention
+            from the brand guide: ● = operational, ◇ = off-net. */}
         <span
           title={connected ? 'on net' : 'off net'}
-          class={connected ? 'text-brand-primary text-xs' : 'text-brand-muted text-xs'}
+          class={
+            connected ? 'c17-status-badge text-brand-ok' : 'c17-status-badge text-brand-subtle'
+          }
         >
-          <span class="sm:hidden" aria-hidden="true">
-            {connected ? '◈' : '◇'}
+          <span class="sm:hidden text-sm" aria-hidden="true">
+            {connected ? '●' : '◇'}
           </span>
-          <span class="hidden sm:inline">{connected ? '◈ ON NET' : '◇ OFF NET'}</span>
+          <span class="hidden sm:inline">{connected ? '● ON NET' : '◇ OFF NET'}</span>
         </span>
       </div>
     </header>

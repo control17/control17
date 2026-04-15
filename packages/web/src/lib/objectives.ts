@@ -105,10 +105,7 @@ export async function fetchObjectiveDetail(
  * store picks up the caller's own echo via the SSE stream and
  * renders it in the inline thread view — no optimistic append.
  */
-export async function discussObjective(
-  id: string,
-  req: DiscussObjectiveRequest,
-): Promise<Message> {
+export async function discussObjective(id: string, req: DiscussObjectiveRequest): Promise<Message> {
   return getClient().discussObjective(id, req);
 }
 

@@ -16,7 +16,7 @@ export interface ObjectivesPanelProps {
 
 const STATUS_STYLE: Record<ObjectiveStatus, string> = {
   active: 'text-brand-primary',
-  blocked: 'text-yellow-400',
+  blocked: 'text-brand-warn',
   done: 'text-brand-muted',
   cancelled: 'text-brand-muted line-through',
 };
@@ -34,33 +34,27 @@ export function ObjectivesPanel({ viewer }: ObjectivesPanelProps) {
 
   if (!loaded) {
     return (
-      <div class="flex-1 flex items-center justify-center text-brand-muted text-sm">
-        loading objectives…
-      </div>
+      <div class="flex-1 flex items-center justify-center c17-label">━━ Loading objectives…</div>
     );
   }
 
   return (
-    <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
-      <div class="flex items-center justify-between mb-4">
+    <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
+      <div class="flex items-center justify-between mb-5 pb-4 border-b border-brand-border-subtle">
         <div>
-          <div class="text-[10px] uppercase tracking-wide text-brand-muted">Objectives</div>
-          <div class="text-lg font-bold text-brand-text">{list.length} on the board</div>
+          <div class="c17-label text-brand-primary">━━ Objectives</div>
+          <div class="c17-panel-title mt-2">{list.length} on the board</div>
         </div>
         {canCreate && (
-          <button
-            type="button"
-            onClick={selectObjectiveCreate}
-            class="px-3 py-1.5 text-xs rounded bg-brand-primary text-brand-bg font-semibold hover:brightness-110"
-          >
+          <button type="button" onClick={selectObjectiveCreate} class="c17-btn-sm-primary">
             + New
           </button>
         )}
       </div>
 
       {list.length === 0 ? (
-        <div class="text-brand-muted text-sm text-center py-8">
-          no objectives yet — {canCreate ? 'click "+ New" to assign one' : 'nothing on your plate'}
+        <div class="text-brand-muted text-sm text-center py-8 font-medium">
+          No objectives yet — {canCreate ? 'click "+ New" to assign one' : 'nothing on your plate'}
         </div>
       ) : (
         <ul class="space-y-2">
@@ -80,22 +74,28 @@ function ObjectiveRow({ objective, viewer }: { objective: Objective; viewer: str
       <button
         type="button"
         onClick={() => selectObjectiveDetail(objective.id)}
-        class="w-full text-left px-3 py-2 rounded border border-brand-border hover:bg-brand-surface/60 focus:outline-none focus:border-brand-primary"
+        class="w-full text-left px-4 py-3 rounded-sm border border-brand-border-subtle bg-brand-surface/40 hover:bg-brand-surface hover:border-brand-border-strong focus:outline-none focus:border-brand-primary transition-colors duration-100"
       >
-        <div class="flex items-center justify-between gap-2 min-w-0">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class={`text-xs font-semibold uppercase ${STATUS_STYLE[objective.status]}`}>
+        <div class="flex items-center justify-between gap-3 min-w-0">
+          <div class="flex items-center gap-3 min-w-0">
+            <span
+              class={`font-display font-semibold uppercase tracking-widest text-xs leading-none ${STATUS_STYLE[objective.status]}`}
+            >
               {objective.status}
             </span>
             <span class="text-brand-text font-semibold truncate">{objective.title}</span>
           </div>
-          <span class="text-xs text-brand-muted flex-shrink-0">
+          <span class="font-display font-medium uppercase tracking-wide text-xs text-brand-subtle flex-shrink-0 leading-none">
             {isMine ? '(you)' : `→ ${objective.assignee}`}
           </span>
         </div>
-        <div class="text-xs text-brand-muted mt-1 truncate">outcome: {objective.outcome}</div>
+        <div class="text-xs text-brand-muted mt-1.5 truncate font-medium">
+          outcome: {objective.outcome}
+        </div>
         {objective.blockReason && (
-          <div class="text-xs text-yellow-400 mt-1">blocked: {objective.blockReason}</div>
+          <div class="text-xs text-brand-warn mt-1 font-medium">
+            blocked: {objective.blockReason}
+          </div>
         )}
       </button>
     </li>

@@ -1,7 +1,38 @@
+/**
+ * Runner + bridge integration test.
+ *
+ * Proves the runner/bridge split end-to-end:
+ *
+ *   1. Boot a fake c17 broker on a random localhost port
+ *   2. Start a runner **in-process** (not as a subprocess), pointing
+ *      at the fake broker — the runner fetches /briefing, binds its
+ *      IPC socket, starts the SSE forwarder
+ *   3. Spawn `c17 mcp-bridge` as a subprocess with `C17_RUNNER_SOCKET`
+ *      pointing at the runner's socket
+ *   4. Drive MCP JSON-RPC on the bridge's stdin, read responses from
+ *      its stdout, and assert the expected behavior flows through:
+ *        - `initialize` handshake succeeds with `claude/channel`
+ *          capability declared
+ *        - `tools/list` returns the full 13-tool surface (commander
+ *          authority from the fake broker)
+ *        - `tools/call` against `send` hits the broker's `/push`
+ *        - inbound SSE from the broker arrives at the bridge as a
+ *          `notifications/claude/channel` notification
+ *        - self-echoes and spoofed meta fields are filtered correctly
+ *
+ * The bridge binary we spawn is `packages/cli/dist/index.js`, so this
+ * test requires the cli to be built before running. The existing
+ * turbo pipeline handles this via `turbo.json`'s `test.dependsOn`
+ * pointing at `^build`.
+ */
+
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { RunnerHandle } from '../../src/runtime/runner.js';
+import { startRunner } from '../../src/runtime/runner.js';
 import {
   FAKE_BROKER_CALLSIGN,
   FAKE_BROKER_MISSION,
@@ -20,24 +51,37 @@ interface JsonRpcMessage {
   error?: Record<string, unknown>;
 }
 
-const LINK_BINARY = resolve(fileURLToPath(new URL('../dist/index.js', import.meta.url)));
-// The link derives its callsign from /briefing, so AGENT_ID here must
-// match whatever the fake broker returns.
+const CLI_BINARY = resolve(fileURLToPath(new URL('../../dist/index.js', import.meta.url)));
 const AGENT_ID = FAKE_BROKER_CALLSIGN;
 
-describe('link binary (spawned subprocess)', () => {
+// Skip the whole suite if the cli hasn't been built yet — avoids a
+// confusing ENOENT inside the child spawn call. Turbo should have
+// built the cli before tests run, but developers running raw
+// `pnpm --filter @control17/cli test` without a prior build will
+// hit this path.
+const describeIfBuilt = existsSync(CLI_BINARY) ? describe : describe.skip;
+
+describeIfBuilt('runner + bridge end-to-end', () => {
   let broker: FakeBroker;
+  let runner: RunnerHandle;
   let proc: ChildProcessWithoutNullStreams;
   let stdoutBuffer = '';
   const inboundQueue: JsonRpcMessage[] = [];
 
   beforeAll(async () => {
     broker = await startFakeBroker();
-    proc = spawn(process.execPath, [LINK_BINARY], {
+    runner = await startRunner({
+      url: broker.url,
+      token: FAKE_BROKER_TOKEN,
+      // Silence the runner's internal logs so vitest output stays clean.
+      log: () => {},
+      noTrace: true,
+    });
+
+    proc = spawn(process.execPath, [CLI_BINARY, 'mcp-bridge'], {
       env: {
         ...process.env,
-        C17_URL: broker.url,
-        C17_TOKEN: FAKE_BROKER_TOKEN,
+        C17_RUNNER_SOCKET: runner.socketPath,
       },
       stdio: 'pipe',
     });
@@ -52,8 +96,7 @@ describe('link binary (spawned subprocess)', () => {
           try {
             inboundQueue.push(JSON.parse(line) as JsonRpcMessage);
           } catch {
-            // Ignore non-JSON lines — the link should never emit those but
-            // if it does we capture stderr separately.
+            /* ignore non-JSON (bridge never emits non-JSON to stdout) */
           }
         }
         idx = stdoutBuffer.indexOf('\n');
@@ -61,9 +104,9 @@ describe('link binary (spawned subprocess)', () => {
     });
 
     proc.stderr.on('data', () => {
-      // Link logs to stderr; swallow here so vitest output stays clean.
-      // Uncomment when debugging:
-      // process.stderr.write(`[link stderr] ${chunk.toString('utf8')}`);
+      // Bridge + runner log structured JSON to stderr; drop it here
+      // to keep vitest output clean. Uncomment when debugging:
+      // process.stderr.write(`[bridge stderr] ${chunk.toString('utf8')}`);
     });
   });
 
@@ -72,6 +115,8 @@ describe('link binary (spawned subprocess)', () => {
       proc.kill('SIGTERM');
       await new Promise<void>((r) => proc.once('exit', () => r()));
     }
+    await runner.shutdown('test-teardown');
+    await runner.waitClosed;
     await broker.close();
   });
 
@@ -124,16 +169,13 @@ describe('link binary (spawned subprocess)', () => {
     send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   });
 
-  it('lists roster, broadcast, send, and recent tools with team context in descriptions', async () => {
+  it('lists the full 13-tool surface (chat + objective + authority-gated)', async () => {
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     const response = await waitForMessage((m) => m.id === 2);
     const result = response.result as {
       tools: Array<{ name: string; description: string }>;
     };
     const names = result.tools.map((t) => t.name).sort();
-    // Commander authority (see fake-broker.ts) unlocks the full
-    // tool surface: 4 chat tools + 4 base objective verbs + 4
-    // authority-gated verbs (create / cancel / watchers / reassign).
     expect(names).toEqual([
       'broadcast',
       'objectives_cancel',
@@ -150,11 +192,6 @@ describe('link binary (spawned subprocess)', () => {
       'send',
     ]);
 
-    // Chat tools all carry explicit squadron context in their
-    // descriptions. Objective tools are scoped to the caller's own
-    // plate and don't need the squadron name baked in — their context
-    // comes from the sticky "openObjectives" snapshot the link rebuilds
-    // on every refresh.
     const chatToolNames = new Set(['roster', 'broadcast', 'send', 'recent']);
     for (const tool of result.tools) {
       if (chatToolNames.has(tool.name)) {
@@ -166,14 +203,13 @@ describe('link binary (spawned subprocess)', () => {
     const roster = result.tools.find((t) => t.name === 'roster');
     expect(roster?.description).toContain(FAKE_BROKER_MISSION);
 
-    // Objective tools should exist and carry appropriate guidance.
     const listTool = result.tools.find((t) => t.name === 'objectives_list');
     expect(listTool?.description).toContain('assigned to you');
     const completeTool = result.tools.find((t) => t.name === 'objectives_complete');
     expect(completeTool?.description).toContain('acceptance');
   });
 
-  it('send tool issues POST /push to the broker', async () => {
+  it('send tool issues POST /push to the broker via runner dispatch', async () => {
     send({
       jsonrpc: '2.0',
       id: 3,
@@ -182,7 +218,7 @@ describe('link binary (spawned subprocess)', () => {
         name: 'send',
         arguments: {
           to: 'peer-1',
-          body: 'hello from link test',
+          body: 'hello from runner/bridge test',
           title: 'greetings',
           level: 'warning',
         },
@@ -195,7 +231,7 @@ describe('link binary (spawned subprocess)', () => {
     expect(result.content[0]?.text ?? '').toContain('delivered to peer-1');
 
     const lastPush = broker.pushes[broker.pushes.length - 1];
-    expect(lastPush?.body).toBe('hello from link test');
+    expect(lastPush?.body).toBe('hello from runner/bridge test');
     expect(lastPush?.title).toBe('greetings');
     expect(lastPush?.level).toBe('warning');
   });
@@ -215,8 +251,9 @@ describe('link binary (spawned subprocess)', () => {
     expect(result.content[0]?.text ?? '').toContain(FAKE_BROKER_CALLSIGN);
   });
 
-  it('forwards broker SSE messages as notifications/claude/channel', async () => {
-    // Link auto-subscribes at startup; wait for it to show up in the broker.
+  it('forwards broker SSE messages as notifications/claude/channel across IPC', async () => {
+    // The runner auto-subscribes at startup via the forwarder loop;
+    // wait for the subscription to appear on the fake broker side.
     const sub = await broker.waitForSubscriber(AGENT_ID);
 
     sub.write({
@@ -244,13 +281,9 @@ describe('link binary (spawned subprocess)', () => {
     expect(params.meta.severity).toBe('high');
   });
 
-  it('suppresses self-echoes on the live stream (never forwards messages from own callsign)', async () => {
+  it('suppresses self-echoes on the live stream', async () => {
     const sub = await broker.waitForSubscriber(AGENT_ID);
 
-    // A self-echo followed immediately by a non-echo. The forwarder
-    // must drop the self-echo and only emit the non-echo. We pin the
-    // assertion on the second message's distinctive body so we don't
-    // accidentally match a queued notification from an earlier test.
     sub.write({
       id: 'msg-self-echo',
       ts: 1_700_000_003_000,
@@ -279,10 +312,6 @@ describe('link binary (spawned subprocess)', () => {
     );
     expect(notif).toBeDefined();
 
-    // And crucially: the self-echo body should NOT be anywhere in the
-    // inbound queue. If it was forwarded, waitForMessage above would
-    // have drained past it, so scan the queue AND verify no past
-    // notification matches the dropped body.
     const selfEchoSeen = inboundQueue.some(
       (m) =>
         m.method === 'notifications/claude/channel' &&
@@ -294,10 +323,6 @@ describe('link binary (spawned subprocess)', () => {
   it('drops reserved meta keys from message.data (anti-spoof)', async () => {
     const sub = await broker.waitForSubscriber(AGENT_ID);
 
-    // A malicious sender tries to overwrite broker-stamped meta via
-    // the `data` field. The forwarder must preserve the authoritative
-    // values (from, thread, level, title, target, msg_id, ts) and
-    // drop the attempted overrides.
     sub.write({
       id: 'msg-spoof',
       ts: 1_700_000_002_000,
@@ -315,7 +340,6 @@ describe('link binary (spawned subprocess)', () => {
         msg_id: 'SPOOFED-ID',
         ts: '0',
         ts_ms: '0',
-        // Non-reserved keys should still flow through.
         legit_field: 'ok',
       },
     });
@@ -324,21 +348,15 @@ describe('link binary (spawned subprocess)', () => {
       (m) => m.method === 'notifications/claude/channel' && m.params?.content === 'real body',
     );
     const params = notif.params as { content: string; meta: Record<string, string> };
-    // Authoritative fields preserved:
     expect(params.meta.from).toBe('alice');
     expect(params.meta.thread).toBe('dm');
     expect(params.meta.level).toBe('warning');
     expect(params.meta.title).toBe('genuine title');
     expect(params.meta.target).toBe(AGENT_ID);
     expect(params.meta.msg_id).toBe('msg-spoof');
-    // `ts` is now the human-readable form; `ts_ms` preserves the
-    // raw unix-ms value for downstream arithmetic. Both are
-    // authoritative — the spoofed `ts: '0'` and `ts_ms: '0'` must
-    // not leak through.
     expect(params.meta.ts).toMatch(/^\d{2}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} UTC$/);
     expect(params.meta.ts).not.toBe('0');
     expect(params.meta.ts_ms).toBe('1700000002000');
-    // Non-reserved data passes through:
     expect(params.meta.legit_field).toBe('ok');
   });
 });

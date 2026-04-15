@@ -39,6 +39,7 @@ import {
 import { roster } from '../lib/roster.js';
 import { selectObjectivesList } from '../lib/view.js';
 import { MessageLine } from './MessageLine.js';
+import { TracePanel } from './TracePanel.js';
 
 export interface ObjectiveDetailProps {
   id: string;
@@ -109,19 +110,19 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
   }
   if (err !== null) {
     return (
-      <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
+      <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
         <BackButton />
-        <div class="text-red-400 text-sm border border-red-900/50 bg-red-950/30 rounded p-3">
-          {err}
+        <div class="c17-label !text-brand-err border border-brand-err/40 bg-brand-err/10 rounded-sm px-4 py-3">
+          ◆ {err}
         </div>
       </div>
     );
   }
   if (!current || !b) {
     return (
-      <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
+      <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
         <BackButton />
-        <div class="text-brand-muted text-sm">objective not found</div>
+        <div class="c17-label text-brand-subtle">◇ Objective not found</div>
       </div>
     );
   }
@@ -170,40 +171,49 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
       <BackButton />
 
       <div>
-        <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-xs uppercase font-semibold text-brand-muted">{current.id}</span>
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="c17-label text-brand-subtle">{current.id}</span>
           <StatusPill status={current.status} />
         </div>
-        <h1 class="text-xl font-bold text-brand-text mt-1">{current.title}</h1>
-        <div class="text-sm text-brand-muted mt-2">
-          assignee: <span class="text-brand-text">{current.assignee}</span> · originator:{' '}
-          <span class="text-brand-text">{current.originator}</span>
+        <h1 class="c17-panel-title !text-2xl mt-2">{current.title}</h1>
+        <div class="text-sm text-brand-muted mt-2 font-medium">
+          assignee: <span class="text-brand-primary-bright font-semibold">{current.assignee}</span>{' '}
+          · originator:{' '}
+          <span class="text-brand-primary-bright font-semibold">{current.originator}</span>
         </div>
       </div>
 
-      <section class="border border-brand-border rounded p-3 bg-brand-surface/40">
-        <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-1">Outcome</div>
-        <div class="text-sm text-brand-text whitespace-pre-wrap">{current.outcome}</div>
+      <section class="border border-brand-border-subtle rounded-sm p-4 bg-brand-surface/40">
+        <div class="c17-label text-brand-primary mb-2">━━ Outcome</div>
+        <div class="text-sm text-brand-text whitespace-pre-wrap font-medium leading-relaxed">
+          {current.outcome}
+        </div>
       </section>
 
       {current.body && (
-        <section class="border border-brand-border rounded p-3">
-          <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-1">Body</div>
-          <div class="text-sm text-brand-text whitespace-pre-wrap">{current.body}</div>
+        <section class="border border-brand-border-subtle rounded-sm p-4">
+          <div class="c17-label text-brand-subtle mb-2">━━ Body</div>
+          <div class="text-sm text-brand-text whitespace-pre-wrap font-medium leading-relaxed">
+            {current.body}
+          </div>
         </section>
       )}
 
       {current.blockReason && (
-        <section class="border border-yellow-900/50 rounded p-3 bg-yellow-950/20">
-          <div class="text-[10px] uppercase tracking-wide text-yellow-400 mb-1">Blocked</div>
-          <div class="text-sm text-yellow-200 whitespace-pre-wrap">{current.blockReason}</div>
+        <section class="border border-brand-warn/40 rounded-sm p-4 bg-brand-warn/10">
+          <div class="c17-label text-brand-warn mb-2">◆ Blocked</div>
+          <div class="text-sm text-brand-coyote-bright whitespace-pre-wrap font-medium leading-relaxed">
+            {current.blockReason}
+          </div>
         </section>
       )}
 
       {current.result && (
-        <section class="border border-brand-primary/50 rounded p-3 bg-brand-primary/10">
-          <div class="text-[10px] uppercase tracking-wide text-brand-primary mb-1">Result</div>
-          <div class="text-sm text-brand-text whitespace-pre-wrap">{current.result}</div>
+        <section class="border border-brand-primary-dim rounded-sm p-4 bg-brand-primary-faint">
+          <div class="c17-label text-brand-primary mb-2">● Result</div>
+          <div class="text-sm text-brand-text whitespace-pre-wrap font-medium leading-relaxed">
+            {current.result}
+          </div>
         </section>
       )}
 
@@ -217,12 +227,12 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
 
       {/* ── Status + completion actions ── */}
       {(canUpdateStatus || canComplete || canCancel || canReassign) && (
-        <section class="border-t border-brand-border pt-4 space-y-3">
-          <div class="text-[10px] uppercase tracking-wide text-brand-muted">Actions</div>
+        <section class="border-t border-brand-border-subtle pt-5 space-y-4">
+          <div class="c17-label text-brand-primary">━━ Actions</div>
 
           {actionError.value && (
-            <div class="text-xs text-red-400 border border-red-900/50 bg-red-950/30 rounded p-2">
-              {actionError.value}
+            <div class="c17-label !text-brand-err border border-brand-err/40 bg-brand-err/10 rounded-sm px-3 py-2">
+              ◆ {actionError.value}
             </div>
           )}
 
@@ -237,7 +247,7 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                       actionBlockReason.value = (e.currentTarget as HTMLInputElement).value;
                     }}
                     placeholder="block reason"
-                    class="flex-1 min-w-0 bg-brand-bg border border-brand-border rounded px-2 py-1.5 text-sm text-brand-text focus:outline-none focus:border-brand-primary"
+                    class="c17-input flex-1 min-w-0 !py-1.5 text-sm"
                   />
                   <button
                     type="button"
@@ -250,9 +260,9 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                         }),
                       )
                     }
-                    class="px-3 py-1.5 text-xs rounded bg-yellow-900/60 text-yellow-100 font-semibold disabled:opacity-40 hover:brightness-110"
+                    class="c17-btn-sm-warn"
                   >
-                    Mark blocked
+                    ◆ Mark blocked
                   </button>
                 </>
               )}
@@ -261,9 +271,9 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                   type="button"
                   disabled={actionBusy.value}
                   onClick={() => void run(() => updateObjective(id, { status: 'active' }))}
-                  class="px-3 py-1.5 text-xs rounded bg-brand-surface border border-brand-border text-brand-text disabled:opacity-40 hover:border-brand-primary"
+                  class="c17-btn-sm-ghost"
                 >
-                  Unblock
+                  ● Unblock
                 </button>
               )}
             </div>
@@ -278,15 +288,15 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                   actionResult.value = (e.currentTarget as HTMLTextAreaElement).value;
                 }}
                 placeholder="result — how was the outcome met? (required)"
-                class="w-full bg-brand-bg border border-brand-border rounded px-2 py-1.5 text-sm text-brand-text focus:outline-none focus:border-brand-primary"
+                class="c17-input !py-2 text-sm"
               />
               <button
                 type="button"
                 disabled={actionBusy.value || actionResult.value.trim().length === 0}
                 onClick={() => void run(() => completeObjective(id, actionResult.value.trim()))}
-                class="px-3 py-1.5 text-xs rounded bg-brand-primary text-brand-bg font-semibold disabled:opacity-40 hover:brightness-110"
+                class="c17-btn-sm-primary"
               >
-                Mark complete
+                ● Mark complete
               </button>
             </div>
           )}
@@ -298,9 +308,9 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                 onChange={(e) => {
                   actionReassignTo.value = (e.currentTarget as HTMLSelectElement).value;
                 }}
-                class="bg-brand-bg border border-brand-border rounded px-2 py-1.5 text-sm text-brand-text focus:outline-none focus:border-brand-primary"
+                class="c17-input !py-1.5 text-sm flex-1 min-w-0"
               >
-                <option value="">reassign to…</option>
+                <option value="">Reassign to…</option>
                 {teammates
                   .filter((t) => t.callsign !== current.assignee)
                   .map((t) => (
@@ -319,9 +329,9 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                     }),
                   )
                 }
-                class="px-3 py-1.5 text-xs rounded bg-brand-surface border border-brand-border text-brand-text disabled:opacity-40 hover:border-brand-primary"
+                class="c17-btn-sm-ghost"
               >
-                Reassign
+                → Reassign
               </button>
             </div>
           )}
@@ -335,7 +345,7 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                   actionCancelReason.value = (e.currentTarget as HTMLInputElement).value;
                 }}
                 placeholder="cancel reason (optional)"
-                class="flex-1 min-w-0 bg-brand-bg border border-brand-border rounded px-2 py-1.5 text-sm text-brand-text focus:outline-none focus:border-brand-primary"
+                class="c17-input flex-1 min-w-0 !py-1.5 text-sm"
               />
               <button
                 type="button"
@@ -349,9 +359,9 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
                     }),
                   )
                 }
-                class="px-3 py-1.5 text-xs rounded bg-red-900/60 text-red-100 font-semibold disabled:opacity-40 hover:brightness-110"
+                class="c17-btn-sm-danger"
               >
-                Cancel objective
+                ◇ Cancel objective
               </button>
             </div>
           )}
@@ -361,24 +371,28 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
       {/* ── Discussion thread ── */}
       <DiscussionThread id={id} viewer={viewer} canPost={canDiscuss} terminal={isTerminal} />
 
+      {/* ── Captured LLM traces (commander-only) ── */}
+      {isCommander && <TracePanel objectiveId={id} />}
+
       {/* ── Lifecycle event log ── */}
-      <section class="border-t border-brand-border pt-4">
-        <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-2">Lifecycle log</div>
+      <section class="border-t border-brand-border-subtle pt-5">
+        <div class="c17-label text-brand-primary mb-3">━━ Lifecycle log</div>
         {events.length === 0 ? (
-          <div class="text-xs text-brand-muted">(no events)</div>
+          <div class="text-xs text-brand-subtle font-medium">(no events)</div>
         ) : (
           <ol class="space-y-1">
             {events.map((ev, i) => (
               <li
                 key={`${ev.ts}-${i}`}
-                class="text-xs font-mono text-brand-muted border-l-2 border-brand-border pl-2 py-0.5"
+                class="text-xs font-mono font-medium text-brand-muted border-l-2 border-brand-border-subtle hover:border-brand-primary-dim pl-3 py-1 transition-colors"
               >
-                <span class="text-brand-text">
+                <span class="text-brand-text-muted">
                   {new Date(ev.ts).toISOString().replace('T', ' ').slice(0, 19)}
                 </span>{' '}
-                {ev.actor} <span class="text-brand-primary">{ev.kind}</span>{' '}
+                <span class="text-brand-primary-bright font-semibold">{ev.actor}</span>{' '}
+                <span class="text-brand-primary">{ev.kind}</span>{' '}
                 {Object.keys(ev.payload).length > 0 && (
-                  <span class="text-brand-muted">{JSON.stringify(ev.payload)}</span>
+                  <span class="text-brand-subtle">{JSON.stringify(ev.payload)}</span>
                 )}
               </li>
             ))}
@@ -456,16 +470,16 @@ function DiscussionThread({
   };
 
   return (
-    <section class="border-t border-brand-border pt-4">
-      <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-2">Discussion</div>
+    <section class="border-t border-brand-border-subtle pt-5">
+      <div class="c17-label text-brand-primary mb-3">━━ Discussion</div>
       <div
         ref={containerRef}
         onScroll={onScroll}
-        class="border border-brand-border rounded bg-brand-bg max-h-80 overflow-y-auto px-3 py-2 space-y-0.5"
+        class="border border-brand-border-subtle rounded-sm bg-brand-bg-inset max-h-80 overflow-y-auto px-3 py-2 space-y-0.5"
       >
         {messages.length === 0 ? (
-          <div class="text-brand-muted text-xs py-4 text-center">
-            no discussion yet — the objective thread is quiet
+          <div class="c17-label text-brand-subtle py-5 text-center">
+            ◇ No discussion yet — the objective thread is quiet
           </div>
         ) : (
           messages.map((m: Message, i: number) => (
@@ -480,9 +494,9 @@ function DiscussionThread({
       </div>
 
       {canPost && !terminal && (
-        <div class="mt-2">
+        <div class="mt-3">
           {discussError.value && (
-            <div class="text-xs text-red-400 mb-1">{discussError.value}</div>
+            <div class="c17-label !text-brand-err mb-2">◆ {discussError.value}</div>
           )}
           <div class="flex items-end gap-2">
             <textarea
@@ -491,22 +505,22 @@ function DiscussionThread({
               onInput={onInput}
               onKeyDown={onKeyDown}
               placeholder={`message the obj-${id.replace(/^obj-/, '')} thread — enter to send, shift+enter for newline`}
-              class="flex-1 resize-none bg-brand-bg border border-brand-border rounded px-2 py-1.5 text-base sm:text-sm text-brand-text font-mono focus:outline-none focus:border-brand-primary"
+              class="c17-input flex-1 resize-none !py-2"
             />
             <button
               type="button"
               onClick={() => void send()}
               disabled={discussSending.value || discussDraft.value.trim().length === 0}
-              class="px-3 py-2 sm:py-1.5 text-xs rounded bg-brand-primary text-brand-bg font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 flex-shrink-0"
+              class="c17-btn-sm-primary flex-shrink-0"
             >
-              {discussSending.value ? '…' : 'send'}
+              {discussSending.value ? '…' : 'Send →'}
             </button>
           </div>
         </div>
       )}
       {canPost && terminal && (
-        <div class="mt-2 text-xs text-brand-muted italic">
-          discussion closed — objective is {detailObjective.value?.status}
+        <div class="mt-3 c17-label text-brand-subtle">
+          ◇ Discussion closed — objective is {detailObjective.value?.status}
         </div>
       )}
     </section>
@@ -538,26 +552,28 @@ function WatchersSection({
   const candidates = teammates.filter((t) => !watchers.includes(t.callsign));
 
   return (
-    <section class="border border-brand-border rounded p-3">
-      <div class="text-[10px] uppercase tracking-wide text-brand-muted mb-2">Watchers</div>
+    <section class="border border-brand-border-subtle rounded-sm p-4">
+      <div class="c17-label text-brand-subtle mb-3">━━ Watchers</div>
       {watchers.length === 0 ? (
-        <div class="text-xs text-brand-muted">
-          no explicit watchers{' '}
-          <span class="text-brand-muted/70">(commanders see everything automatically)</span>
+        <div class="text-xs text-brand-subtle font-medium">
+          No explicit watchers{' '}
+          <span class="text-brand-faint">(commanders see everything automatically)</span>
         </div>
       ) : (
         <div class="flex flex-wrap gap-1.5">
           {watchers.map((w) => (
             <span
               key={w}
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-brand-surface border border-brand-border text-brand-text"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-display font-semibold uppercase tracking-wide bg-brand-primary-faint border border-brand-primary-dim text-brand-primary-bright"
             >
               <span>{w}</span>
               {canManage && (
                 <button
                   type="button"
-                  onClick={() => void run(() => updateObjectiveWatchers(objectiveId, { remove: [w] }))}
-                  class="text-brand-muted hover:text-red-300 text-[11px] leading-none -mr-0.5"
+                  onClick={() =>
+                    void run(() => updateObjectiveWatchers(objectiveId, { remove: [w] }))
+                  }
+                  class="text-brand-primary-dim hover:text-brand-err text-sm leading-none -mr-0.5"
                   aria-label={`Remove watcher ${w}`}
                   title={`Remove ${w}`}
                 >
@@ -569,15 +585,15 @@ function WatchersSection({
         </div>
       )}
       {canManage && candidates.length > 0 && (
-        <div class="mt-2 flex items-center gap-2">
+        <div class="mt-3 flex items-center gap-2">
           <select
             value={actionWatcherAdd.value}
             onChange={(e) => {
               actionWatcherAdd.value = (e.currentTarget as HTMLSelectElement).value;
             }}
-            class="bg-brand-bg border border-brand-border rounded px-2 py-1 text-xs text-brand-text focus:outline-none focus:border-brand-primary"
+            class="c17-input !py-1.5 text-xs flex-1"
           >
-            <option value="">add watcher…</option>
+            <option value="">Add watcher…</option>
             {candidates.map((t) => (
               <option key={t.callsign} value={t.callsign}>
                 {t.callsign} ({t.role})
@@ -596,9 +612,9 @@ function WatchersSection({
                 return r;
               });
             }}
-            class="px-2 py-1 text-xs rounded bg-brand-surface border border-brand-border text-brand-text disabled:opacity-40 hover:border-brand-primary"
+            class="c17-btn-sm-ghost"
           >
-            Add
+            + Add
           </button>
         </div>
       )}
@@ -611,23 +627,23 @@ function BackButton() {
     <button
       type="button"
       onClick={selectObjectivesList}
-      class="text-xs text-brand-muted hover:text-brand-text mb-2"
+      class="c17-label text-brand-subtle hover:text-brand-text mb-3"
     >
-      ← back to objectives
+      ← Back to objectives
     </button>
   );
 }
 
 function StatusPill({ status }: { status: Objective['status'] }) {
   const styles: Record<Objective['status'], string> = {
-    active: 'bg-brand-primary/20 text-brand-primary border-brand-primary/40',
-    blocked: 'bg-yellow-900/30 text-yellow-300 border-yellow-700/50',
+    active: 'bg-brand-primary-faint text-brand-primary-bright border-brand-primary-dim',
+    blocked: 'bg-brand-warn/10 text-brand-warn border-brand-warn/40',
     done: 'bg-brand-surface text-brand-muted border-brand-border',
-    cancelled: 'bg-brand-surface text-brand-muted border-brand-border',
+    cancelled: 'bg-brand-surface text-brand-subtle border-brand-border line-through',
   };
   return (
     <span
-      class={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${styles[status]}`}
+      class={`font-display font-semibold uppercase tracking-widest text-xs px-2.5 py-1 rounded-sm border leading-none ${styles[status]}`}
     >
       {status}
     </span>

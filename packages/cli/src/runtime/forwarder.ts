@@ -10,8 +10,17 @@
 import type { Client as BrokerClient } from '@control17/sdk/client';
 import { MCP_CHANNEL_NOTIFICATION } from '@control17/sdk/protocol';
 import type { Message } from '@control17/sdk/types';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { formatAgentTimestamp } from './tools.js';
+
+/**
+ * Minimal surface the forwarder needs from its notification sink. In
+ * the link this was an `@modelcontextprotocol/sdk` `Server`; in the
+ * runner it's a shim that converts the call into an IPC frame. Both
+ * satisfy this shape with no `as any` casts.
+ */
+export interface ForwarderNotificationSink {
+  notification(args: { method: string; params: Record<string, unknown> }): Promise<void>;
+}
 
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
@@ -19,7 +28,7 @@ const BACKOFF_MAX_MS = 30_000;
 export type ThreadType = 'primary' | 'dm';
 
 export interface ForwarderOptions {
-  server: Server;
+  server: ForwarderNotificationSink;
   brokerClient: BrokerClient;
   callsign: string;
   signal: AbortSignal;
@@ -109,7 +118,7 @@ const RESERVED_META_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 async function forwardMessage(
-  server: Server,
+  server: ForwarderNotificationSink,
   message: Message,
   log: (msg: string, ctx?: Record<string, unknown>) => void,
 ): Promise<void> {

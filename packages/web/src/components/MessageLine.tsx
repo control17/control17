@@ -98,30 +98,36 @@ export function MessageLine({ message, viewer, previousMessage }: MessageLinePro
     // Continuation: timestamp in the gutter, sender suppressed, body
     // occupies the message column.
     return (
-      <div class="flex gap-2 py-0.5 leading-snug text-sm">
-        <span class="text-brand-muted text-xs font-mono flex-shrink-0 mt-[3px]">
+      <div class="flex gap-3 py-0.5 leading-relaxed text-sm">
+        <span class="text-brand-subtle text-xs font-mono font-medium flex-shrink-0 mt-[3px] tabular-nums">
           {formatTs(message.ts)}
         </span>
-        <div class="flex-1 min-w-0 max-w-[72ch] text-brand-text break-words">
+        <div class="flex-1 min-w-0 max-w-[72ch] text-brand-text font-medium break-words">
           <span dangerouslySetInnerHTML={{ __html: body }} />
         </div>
       </div>
     );
   }
 
-  // Header row. `mt-2` adds breathing room between groups — only
+  // Header row. `mt-3` adds breathing room between groups — only
   // when there IS a previous message (the first message in a thread
   // shouldn't get a top margin and push away from the top of the
   // transcript container).
-  const marginClass = previousMessage !== undefined ? 'mt-2' : '';
+  const marginClass = previousMessage !== undefined ? 'mt-3' : '';
   return (
-    <div class={`flex gap-2 py-0.5 leading-snug text-sm ${marginClass}`}>
-      <span class="text-brand-muted text-xs font-mono flex-shrink-0 mt-[3px]">
+    <div class={`flex gap-3 py-0.5 leading-relaxed text-sm ${marginClass}`}>
+      <span class="text-brand-subtle text-xs font-mono font-medium flex-shrink-0 mt-[3px] tabular-nums">
         {formatTs(message.ts)}
       </span>
-      <div class="flex-1 min-w-0 max-w-[72ch] text-brand-text break-words">
-        <span class={`${colorClass} font-semibold mr-2`}>{sender}</span>
-        {message.title && <span class="text-brand-muted mr-2">[{message.title}]</span>}
+      <div class="flex-1 min-w-0 max-w-[72ch] text-brand-text font-medium break-words">
+        <span class={`${colorClass} font-display font-bold uppercase tracking-tight mr-2`}>
+          {sender}
+        </span>
+        {message.title && (
+          <span class="font-display font-semibold uppercase tracking-wide text-brand-subtle text-xs mr-2">
+            [{message.title}]
+          </span>
+        )}
         <span dangerouslySetInnerHTML={{ __html: body }} />
       </div>
     </div>

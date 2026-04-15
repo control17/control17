@@ -19,8 +19,10 @@ import {
   HealthResponseSchema,
   HistoryResponseSchema,
   ListObjectivesResponseSchema,
+  ListObjectiveTracesResponseSchema,
   MessageSchema,
   ObjectiveSchema,
+  ObjectiveTraceSchema,
   PushPayloadSchema,
   PushResultSchema,
   PushSubscriptionResponseSchema,
@@ -39,6 +41,7 @@ import type {
   ListObjectivesQuery,
   Message,
   Objective,
+  ObjectiveTrace,
   PushPayload,
   PushResult,
   PushSubscriptionPayload,
@@ -49,6 +52,7 @@ import type {
   TotpLoginRequest,
   UpdateObjectiveRequest,
   UpdateWatchersRequest,
+  UploadObjectiveTraceRequest,
   VapidPublicKeyResponse,
 } from './types.js';
 
@@ -358,10 +362,7 @@ export class Client {
    * known squadron slot. Empty add/remove arrays are no-ops; the
    * server still returns the updated objective for sync purposes.
    */
-  async updateObjectiveWatchers(
-    id: string,
-    payload: UpdateWatchersRequest,
-  ): Promise<Objective> {
+  async updateObjectiveWatchers(id: string, payload: UpdateWatchersRequest): Promise<Objective> {
     const resp = await this.request(OBJECTIVE_PATHS.watchers(id), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -383,6 +384,34 @@ export class Client {
       body: JSON.stringify(payload),
     });
     return MessageSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Upload a captured trace for an objective. Only the current
+   * assignee is allowed server-side — the runner owned by that slot
+   * captures the agent's LLM traffic via its SOCKS relay, decrypts
+   * with tshark + TLS keys, and ships the structured entries here.
+   */
+  async uploadObjectiveTrace(
+    id: string,
+    payload: UploadObjectiveTraceRequest,
+  ): Promise<ObjectiveTrace> {
+    const resp = await this.request(OBJECTIVE_PATHS.traces(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveTraceSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * List all traces uploaded for an objective. Commander-only
+   * server-side — operators and non-commanders get 403. Returns
+   * traces oldest-first so the UI can render them in order.
+   */
+  async listObjectiveTraces(id: string): Promise<ObjectiveTrace[]> {
+    const resp = await this.request(OBJECTIVE_PATHS.traces(id), { method: 'GET' });
+    return ListObjectiveTracesResponseSchema.parse(await this.json(resp)).traces;
   }
 
   async history(query: HistoryQuery = {}): Promise<Message[]> {

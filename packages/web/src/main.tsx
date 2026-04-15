@@ -15,6 +15,7 @@
 
 import '@unocss/reset/tailwind.css';
 import 'uno.css';
+import './brand.css';
 import { registerSW } from 'virtual:pwa-register';
 import { render } from 'preact';
 import { App } from './App.js';

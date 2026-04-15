@@ -37,9 +37,12 @@ import type {
   ObjectiveEvent,
   ObjectiveEventKind,
   ObjectiveStatus,
+  ObjectiveTrace,
   ReassignObjectiveRequest,
+  TraceEntry,
   UpdateObjectiveRequest,
   UpdateWatchersRequest,
+  UploadObjectiveTraceRequest,
 } from '@control17/sdk/types';
 import type { DatabaseSyncInstance, StatementInstance } from './db.js';
 
@@ -72,6 +75,20 @@ const CREATE_SCHEMA = `
     FOREIGN KEY (objective_id) REFERENCES objectives(id)
   );
   CREATE INDEX IF NOT EXISTS objective_events_id_idx ON objective_events (objective_id, ts);
+
+  CREATE TABLE IF NOT EXISTS objective_traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    objective_id TEXT NOT NULL,
+    span_start INTEGER NOT NULL,
+    span_end INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    entries_json TEXT NOT NULL,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (objective_id) REFERENCES objectives(id)
+  );
+  CREATE INDEX IF NOT EXISTS objective_traces_obj_idx
+    ON objective_traces (objective_id, created_at);
 `;
 
 interface ObjectiveRow {
@@ -98,6 +115,17 @@ interface ObjectiveEventRow {
   payload: string;
 }
 
+interface ObjectiveTraceRow {
+  id: number;
+  objective_id: string;
+  span_start: number;
+  span_end: number;
+  provider: string;
+  entries_json: string;
+  truncated: number;
+  created_at: number;
+}
+
 function rowToObjective(row: ObjectiveRow): Objective {
   let watchers: string[] = [];
   try {
@@ -122,6 +150,26 @@ function rowToObjective(row: ObjectiveRow): Objective {
     completedAt: row.completed_at,
     result: row.result,
     blockReason: row.block_reason,
+  };
+}
+
+function rowToTrace(row: ObjectiveTraceRow): ObjectiveTrace {
+  let entries: TraceEntry[] = [];
+  try {
+    const parsed = JSON.parse(row.entries_json);
+    if (Array.isArray(parsed)) entries = parsed as TraceEntry[];
+  } catch {
+    /* malformed — default to empty; loss-of-fidelity rather than throw */
+  }
+  return {
+    id: row.id,
+    objectiveId: row.objective_id,
+    spanStart: row.span_start,
+    spanEnd: row.span_end,
+    provider: row.provider,
+    entries,
+    truncated: row.truncated !== 0,
+    createdAt: row.created_at,
   };
 }
 
@@ -184,11 +232,7 @@ export interface ObjectivesStore {
    * Create and assign an objective. The originator is the creating
    * caller's callsign. Emits an `assigned` event.
    */
-  create(
-    input: CreateObjectiveRequest,
-    originator: string,
-    now?: number,
-  ): ObjectivesMutationResult;
+  create(input: CreateObjectiveRequest, originator: string, now?: number): ObjectivesMutationResult;
   /**
    * Update status / note on an active or blocked objective. Never
    * transitions to `done` — use `complete` for that. Emits 0-2 events
@@ -234,6 +278,15 @@ export interface ObjectivesStore {
     actor: string,
     now?: number,
   ): ObjectivesMutationResult;
+  /**
+   * Append a captured trace for an objective. The caller identity
+   * check (assignee-only) happens upstream in the app layer; the
+   * store trusts its callers. Returns the inserted row with its
+   * assigned numeric id.
+   */
+  appendTrace(id: string, input: UploadObjectiveTraceRequest, now?: number): ObjectiveTrace;
+  /** List traces for an objective, oldest-first. */
+  listTraces(id: string): ObjectiveTrace[];
 }
 
 class SqliteObjectivesStore implements ObjectivesStore {
@@ -248,6 +301,9 @@ class SqliteObjectivesStore implements ObjectivesStore {
   private readonly updateWatchersStmt: StatementInstance;
   private readonly insertEventStmt: StatementInstance;
   private readonly listEventsStmt: StatementInstance;
+  private readonly insertTraceStmt: StatementInstance;
+  private readonly listTracesStmt: StatementInstance;
+  private readonly getTraceStmt: StatementInstance;
 
   constructor(db: DatabaseSyncInstance) {
     this.db = db;
@@ -296,6 +352,15 @@ class SqliteObjectivesStore implements ObjectivesStore {
     this.listEventsStmt = db.prepare(
       'SELECT * FROM objective_events WHERE objective_id = ? ORDER BY ts ASC, ROWID ASC',
     );
+    this.insertTraceStmt = db.prepare(
+      `INSERT INTO objective_traces (
+         objective_id, span_start, span_end, provider, entries_json, truncated, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.listTracesStmt = db.prepare(
+      'SELECT * FROM objective_traces WHERE objective_id = ? ORDER BY created_at ASC, id ASC',
+    );
+    this.getTraceStmt = db.prepare('SELECT * FROM objective_traces WHERE id = ?');
   }
 
   list(filter: { assignee?: string; status?: ObjectiveStatus } = {}): Objective[] {
@@ -685,6 +750,36 @@ class SqliteObjectivesStore implements ObjectivesStore {
   ): ObjectiveEvent {
     this.insertEventStmt.run(id, ts, actor, kind, JSON.stringify(payload));
     return { objectiveId: id, ts, actor, kind, payload };
+  }
+
+  appendTrace(
+    id: string,
+    input: UploadObjectiveTraceRequest,
+    now: number = Date.now(),
+  ): ObjectiveTrace {
+    const existing = this.get(id);
+    if (!existing) throw new ObjectivesError('not_found', `no such objective: ${id}`);
+    const entriesJson = JSON.stringify(input.entries ?? []);
+    const result = this.insertTraceStmt.run(
+      id,
+      input.spanStart,
+      input.spanEnd,
+      input.provider,
+      entriesJson,
+      input.truncated ? 1 : 0,
+      now,
+    );
+    const insertedId = Number(result.lastInsertRowid ?? 0);
+    const row = this.getTraceStmt.get(insertedId) as unknown as ObjectiveTraceRow | undefined;
+    if (!row) {
+      throw new ObjectivesError('not_found', `trace insert race: row ${insertedId} vanished`);
+    }
+    return rowToTrace(row);
+  }
+
+  listTraces(id: string): ObjectiveTrace[] {
+    const rows = this.listTracesStmt.all(id) as unknown as ObjectiveTraceRow[];
+    return rows.map(rowToTrace);
   }
 }
 

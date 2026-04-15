@@ -32,9 +32,6 @@ importers:
       '@hono/node-server':
         specifier: ^1.19.14
         version: 1.19.14(hono@4.12.12)
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(zod@4.3.6)
       hono:
         specifier: ^4.12.12
         version: 4.12.12
@@ -57,9 +54,6 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
-      '@control17/link':
-        specifier: workspace:*
-        version: link:../../packages/link
       '@control17/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -90,9 +84,6 @@ importers:
       '@control17/core':
         specifier: workspace:*
         version: link:../core
-      '@control17/link':
-        specifier: workspace:*
-        version: link:../link
       '@control17/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -108,10 +99,10 @@ importers:
       '@control17/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
     devDependencies:
-      '@control17/link':
-        specifier: workspace:*
-        version: link:../link
       '@control17/server':
         specifier: workspace:*
         version: link:../../apps/server
@@ -137,28 +128,6 @@ importers:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
-      tsup:
-        specifier: ^8.0.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.9)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.6.0
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.0
-        version: 4.1.4(@types/node@22.19.17)(happy-dom@18.0.1)(vite@6.4.2(@types/node@22.19.17)(jiti@2.6.1)(terser@5.46.1))
-
-  packages/link:
-    dependencies:
-      '@control17/sdk':
-        specifier: workspace:*
-        version: link:../sdk
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(zod@4.3.6)
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.17
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.9)(typescript@5.9.3)

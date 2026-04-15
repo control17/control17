@@ -37,12 +37,13 @@ export const OBJECTIVE_PATHS = {
   reassign: (id: string) => `/objectives/${encodeURIComponent(id)}/reassign`,
   discuss: (id: string) => `/objectives/${encodeURIComponent(id)}/discuss`,
   watchers: (id: string) => `/objectives/${encodeURIComponent(id)}/watchers`,
+  traces: (id: string) => `/objectives/${encodeURIComponent(id)}/traces`,
 } as const;
 
 export const DEFAULT_PORT = 8717 as const;
 
 export const ENV = {
-  // Client-side: broker URL + bearer token held in env for c17 / c17-link.
+  // Client-side: broker URL + bearer token held in env for `c17` subcommands.
   url: 'C17_URL',
   token: 'C17_TOKEN',
   // Server-side: where to find the team config file + listener config.

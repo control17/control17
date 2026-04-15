@@ -36,6 +36,7 @@ import {
   TotpLoginRequestSchema,
   UpdateObjectiveRequestSchema,
   UpdateWatchersRequestSchema,
+  UploadObjectiveTraceRequestSchema,
 } from '@control17/sdk/schemas';
 import type {
   Message,
@@ -743,11 +744,7 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
         return c.json({ error: 'invalid update payload', details: parsed.error.issues }, 400);
       }
       try {
-        const { objective: updated, events } = objectives.update(
-          id,
-          parsed.data,
-          slot.callsign,
-        );
+        const { objective: updated, events } = objectives.update(id, parsed.data, slot.callsign);
         // `events` can have 0-2 entries: 0 for a no-op (status=current,
         // no note), 1 for a single status transition or a note-only
         // update, 2 for a status transition + note in the same call.
@@ -781,11 +778,7 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
         return c.json({ error: 'invalid complete payload', details: parsed.error.issues }, 400);
       }
       try {
-        const { objective: updated, events } = objectives.complete(
-          id,
-          parsed.data,
-          slot.callsign,
-        );
+        const { objective: updated, events } = objectives.complete(id, parsed.data, slot.callsign);
         queueMicrotask(() => {
           for (const ev of events) {
             void publishObjectiveEvent(updated, ev, slot.callsign);
@@ -819,11 +812,7 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
         return c.json({ error: 'invalid cancel payload', details: parsed.error.issues }, 400);
       }
       try {
-        const { objective: updated, events } = objectives.cancel(
-          id,
-          parsed.data,
-          slot.callsign,
-        );
+        const { objective: updated, events } = objectives.cancel(id, parsed.data, slot.callsign);
         queueMicrotask(() => {
           for (const ev of events) {
             void publishObjectiveEvent(updated, ev, slot.callsign);
@@ -852,11 +841,7 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
         return c.json({ error: `unknown assignee: ${parsed.data.to}` }, 400);
       }
       try {
-        const { objective: updated, events } = objectives.reassign(
-          id,
-          parsed.data,
-          slot.callsign,
-        );
+        const { objective: updated, events } = objectives.reassign(id, parsed.data, slot.callsign);
         queueMicrotask(() => {
           for (const ev of events) {
             void publishObjectiveEvent(updated, ev, slot.callsign);
@@ -950,6 +935,54 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
     // same behaviour as `broadcast`/`send`. The web client still
     // renders its own posts because the web SSE handler does NOT
     // suppress self-echoes.
+    // POST /objectives/:id/traces (assignee only)
+    //
+    // The current assignee's runner uploads decoded LLM traces here.
+    // Gate on exact assignee match — not commanders, not originators.
+    // If a reassignment has happened mid-flight, the old assignee can
+    // no longer upload to the objective, which is correct: the trace
+    // belongs to whoever is doing the work now.
+    app.post(`${PATHS.objectives}/:id/traces`, auth, async (c) => {
+      const slot = c.get('slot');
+      const id = c.req.param('id');
+      const current = objectives.get(id);
+      if (!current) return c.json({ error: `no such objective: ${id}` }, 404);
+      if (current.assignee !== slot.callsign) {
+        return c.json({ error: 'only the current assignee may upload traces' }, 403);
+      }
+      const raw = await c.req.json().catch(() => null);
+      const parsed = UploadObjectiveTraceRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return c.json({ error: 'invalid trace payload', details: parsed.error.issues }, 400);
+      }
+      try {
+        const trace = objectives.appendTrace(id, parsed.data);
+        return c.json(trace, 201);
+      } catch (err) {
+        const mapped = mapObjectivesError(err);
+        return c.json(mapped.body, mapped.status as 400 | 404 | 409 | 500);
+      }
+    });
+
+    // GET /objectives/:id/traces (commander only)
+    //
+    // Traces contain decrypted LLM prompts + completions, which are
+    // the most sensitive content on the squadron net. Only commanders
+    // can view them — operators, lieutenants, assignees, and watchers
+    // all get 403. This matches the spec's "commander-gated review"
+    // stance for trace content.
+    app.get(`${PATHS.objectives}/:id/traces`, auth, async (c) => {
+      const slot = c.get('slot');
+      if (slot.authority !== 'commander') {
+        return c.json({ error: 'only commanders may view objective traces' }, 403);
+      }
+      const id = c.req.param('id');
+      const current = objectives.get(id);
+      if (!current) return c.json({ error: `no such objective: ${id}` }, 404);
+      const traces = objectives.listTraces(id);
+      return c.json({ traces });
+    });
+
     app.post(`${PATHS.objectives}/:id/discuss`, auth, async (c) => {
       const slot = c.get('slot');
       const id = c.req.param('id');
@@ -1009,10 +1042,7 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
         // `broker.hasAgent` should be true for any active callsign.
         // Return 202 semantics as 200 with an empty-ish body rather
         // than faking a Message shape.
-        return c.json(
-          { error: 'no thread members are currently registered with the broker' },
-          503,
-        );
+        return c.json({ error: 'no thread members are currently registered with the broker' }, 503);
       }
       return c.json(canonical);
     });
@@ -1243,8 +1273,7 @@ function systemMessageForEvent(
       ].join('\n');
     }
     case 'watcher_added': {
-      const cs =
-        typeof event?.payload.callsign === 'string' ? event.payload.callsign : '(unknown)';
+      const cs = typeof event?.payload.callsign === 'string' ? event.payload.callsign : '(unknown)';
       return [
         header,
         `title:    ${objective.title}`,
@@ -1254,8 +1283,7 @@ function systemMessageForEvent(
       ].join('\n');
     }
     case 'watcher_removed': {
-      const cs =
-        typeof event?.payload.callsign === 'string' ? event.payload.callsign : '(unknown)';
+      const cs = typeof event?.payload.callsign === 'string' ? event.payload.callsign : '(unknown)';
       return [header, `title:   ${objective.title}`, `watcher: ${cs}`].join('\n');
     }
   }

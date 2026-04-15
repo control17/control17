@@ -38,17 +38,14 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@control17/sdk": "workspace:*"
+    "@control17/sdk": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "peerDependencies": {
-    "@control17/link": "workspace:*",
     "@control17/server": "workspace:*",
     "@control17/tui": "workspace:*"
   },
   "peerDependenciesMeta": {
-    "@control17/link": {
-      "optional": true
-    },
     "@control17/server": {
       "optional": true
     },
@@ -57,7 +54,6 @@
     }
   },
   "devDependencies": {
-    "@control17/link": "workspace:*",
     "@control17/server": "workspace:*",
     "@control17/tui": "workspace:*",
     "@types/node": "^22.0.0",

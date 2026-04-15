@@ -26,10 +26,10 @@ export function NotificationToggle() {
     if (state.reason === 'ios-needs-install') {
       return (
         <span
-          class="text-xs text-brand-muted"
+          class="c17-status-badge text-brand-subtle"
           title="Add control17 to your home screen to enable notifications on iOS"
         >
-          install to enable ◈
+          ◈ Install to enable
         </span>
       );
     }
@@ -40,15 +40,15 @@ export function NotificationToggle() {
   if (state.kind === 'denied') {
     return (
       <span
-        class="text-xs text-brand-muted"
+        class="c17-status-badge text-brand-subtle"
         title="Notifications are blocked in your browser settings"
       >
-        notifications blocked
+        ◇ Notifications blocked
       </span>
     );
   }
   if (state.kind === 'subscribing') {
-    return <span class="text-xs text-brand-muted">…</span>;
+    return <span class="c17-status-badge text-brand-subtle">…</span>;
   }
   if (state.kind === 'subscribed') {
     return (
@@ -57,10 +57,10 @@ export function NotificationToggle() {
         onClick={() => {
           void disablePush();
         }}
-        class="text-xs text-brand-primary hover:text-brand-text"
+        class="c17-status-badge text-brand-ok hover:text-brand-primary-bright"
         title="Click to disable notifications for this device"
       >
-        ◈ notifications on
+        ● Notifications on
       </button>
     );
   }
@@ -71,10 +71,10 @@ export function NotificationToggle() {
         onClick={() => {
           void enablePush();
         }}
-        class="text-xs text-red-400 hover:text-brand-text"
+        class="c17-status-badge text-brand-err hover:text-brand-text"
         title={state.message}
       >
-        notifications: {state.message.slice(0, 30)}
+        ◆ Notifications: {state.message.slice(0, 30)}
       </button>
     );
   }
@@ -85,9 +85,9 @@ export function NotificationToggle() {
       onClick={() => {
         void enablePush();
       }}
-      class="text-xs text-brand-muted hover:text-brand-text"
+      class="c17-status-badge text-brand-subtle hover:text-brand-text"
     >
-      enable notifications
+      ◇ Enable notifications
     </button>
   );
 }

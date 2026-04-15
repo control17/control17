@@ -6,38 +6,20 @@
     <meta name="theme-color" content="#5f875f" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>control17</title>
-    <meta name="description" content="control17 — self-hosted agent team control plane." />
-    <style>
-      /* Themed scrollbars — match brand palette so overflow regions
-         (transcript, sidebar, roster) blend into the dark surface
-         instead of showing the OS default light track. */
-      :root {
-        scrollbar-color: #2a2f35 transparent;
-        scrollbar-width: thin;
-      }
-      ::-webkit-scrollbar {
-        width: 10px;
-        height: 10px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #2a2f35;
-        border-radius: 6px;
-        border: 2px solid transparent;
-        background-clip: padding-box;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #3a4048;
-        background-clip: padding-box;
-        border: 2px solid transparent;
-      }
-      ::-webkit-scrollbar-corner {
-        background: transparent;
-      }
-    </style>
+    <meta name="description" content="control17 — self-hosted agent squadron control plane." />
+    <!--
+      Font loading. Both faces (Barlow Condensed display + IBM Plex Mono body)
+      are also @imported from src/brand.css so they land even on routes that
+      bypass this shell; the preconnect hints here just cut the initial RTT.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   </head>
+  <!--
+    Body class: font-mono (Plex) is the default body face, bg-brand-bg /
+    text-brand-text set the base color surface. Everything else (font
+    weights, heading treatments, scrollbars) comes from src/brand.css.
+  -->
   <body class="m-0 font-mono bg-brand-bg text-brand-text">
     <div id="app"></div>
     <script type="module" src="/src/main.tsx"></script>

@@ -352,8 +352,10 @@ describe('<RosterPanel />', () => {
     };
     render(<RosterPanel viewer="ACTUAL" />);
     await waitFor(() => {
-      expect(screen.getByText(/online/)).toBeTruthy();
-      expect(screen.getByText(/offline/)).toBeTruthy();
+      // Per brand guide: status labels use stenciled "ON NET" / "OFF NET"
+      // instead of lowercase "online" / "offline".
+      expect(screen.getByText(/ON NET/)).toBeTruthy();
+      expect(screen.getByText(/OFF NET/)).toBeTruthy();
     });
   });
 

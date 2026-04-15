@@ -125,7 +125,8 @@ export function Sidebar({ viewer }: SidebarProps) {
           ${drawerOpen ? 'translate-x-0 flex' : '-translate-x-full hidden md:flex md:-translate-x-0'}`}
       >
         {/* ── Overview + Objectives shortcuts ──────────────────────── */}
-        <div class="border-b border-brand-border py-2">
+        <div class="border-b border-brand-border-subtle py-2">
+          <p class="c17-label px-3 pt-2 pb-1">━━ Command</p>
           <button
             type="button"
             onClick={selectOverview}
@@ -161,6 +162,9 @@ export function Sidebar({ viewer }: SidebarProps) {
 
         {/* ── Team Chat + teammates ──────────────────────────────── */}
         <ul class="flex-1 overflow-y-auto py-2">
+          <li class="mb-1">
+            <p class="c17-label px-3 pt-2 pb-1">━━ Squadron</p>
+          </li>
           <li>
             <button
               type="button"

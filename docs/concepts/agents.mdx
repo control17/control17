@@ -1,0 +1,130 @@
+---
+title: Agents, slots, and authority
+description: How control17 thinks about agent identity — slots, callsigns, roles, authority levels, and tokens.
+section: Concepts
+order: 10
+---
+
+# Agents, slots, and authority
+
+control17 doesn't have a concept of "an agent" as a database row.
+It has **slots**. A slot is a named seat in a squadron with a
+callsign, a role, an authority level, and a bearer token. Anything
+that holds the token and speaks the protocol is that slot — for as
+long as it holds the token.
+
+This matters because agents come and go. A Claude session crashes
+and restarts; a container spins up; an operator moves between
+machines. The slot survives all of it. The identity is the slot,
+not the process.
+
+## Callsigns
+
+The callsign is the human-readable handle operators address. It's
+short, unique within a squadron, and case-insensitive:
+
+```bash
+c17 push --agent ALPHA-1 --body "review the PR"
+c17 push --agent BRAVO-2 --body "run the migration dry-run"
+```
+
+Callsigns are chosen at squadron creation time and can be anything —
+phonetic alphabet (`ALPHA-1`, `BRAVO-2`, `CHARLIE`), role names
+(`lead`, `reviewer`, `ops`), or whatever matches how your team
+thinks. The broker doesn't care.
+
+One reserved convention: `ACTUAL` is the default callsign for the
+first commander slot created by the first-run wizard, echoing
+military radio usage ("the commander, not a proxy"). It's just a
+default though — you can change it.
+
+## Roles
+
+A role is a key into the squadron's roles map. Each role has a
+free-form `description` and a free-form `instructions` string, plus
+an optional `editor` flag that lets the slot enroll in TOTP for web
+UI access:
+
+```json
+{
+  "roles": {
+    "commander": {
+      "description": "Leads the squadron.",
+      "instructions": "Set direction, assign objectives, review traces.",
+      "editor": true
+    },
+    "implementer": {
+      "description": "Writes and ships code.",
+      "instructions": "Own assigned objectives end-to-end; post status updates."
+    }
+  }
+}
+```
+
+Roles show up in `c17 roster` output and in the web dashboard so
+operators can tell who does what at a glance. They also appear in
+the slot's **briefing** — the composed context string the runner
+injects as MCP `instructions` at session start. They don't grant
+permissions; that's what authority is for.
+
+## Authority
+
+This is the real access control primitive. Every slot has one of
+three authority levels:
+
+| Authority | What it permits |
+|---|---|
+| **commander** | Full squadron power: create/assign objectives, reassign, cancel any objective, manage watchers, **view captured LLM traces** |
+| **lieutenant** | Create objectives (becomes the `originator`), cancel objectives they originated, post to discussion threads they're members of |
+| **operator** | Execute assigned work: update own status, complete assigned objectives, post to threads they're members of |
+
+Authority is set in the squadron config and checked server-side on
+every mutating endpoint. A slot cannot elevate its own authority at
+runtime. If you want a slot to become a commander, edit the config
+and restart the broker.
+
+Some practical implications:
+
+- A commander + lieutenant can both create objectives, but only a
+  commander can **reassign** one.
+- The assignee of an objective is always the one who calls
+  `objectives_complete` — not the commander. Even commanders can't
+  complete work they haven't been assigned.
+- Trace capture uploads (`POST /objectives/:id/traces`) require the
+  caller to be the **current** assignee. Reassignment flips who's
+  allowed to upload. Trace viewing (`GET`) is commander-only.
+
+## Tokens
+
+Each slot has a bearer token generated at squadron setup. The token
+is:
+
+- Printed once during the wizard and stored in `./control17.json`
+- **Rehashed to SHA-256 on first boot** — the on-disk file is
+  atomically rewritten at `0o600` so the broker holds only the hash
+- Re-rotatable by editing the config and restarting
+
+Treat tokens like SSH keys. If one leaks, rotate it and redistribute.
+The broker validates against the hashed version on every request,
+so any process still holding the stale token starts failing
+immediately.
+
+## How slots relate to objectives
+
+Every objective has two slot references: an **originator** (who
+created it) and an **assignee** (who owns execution). The assignee
+can change via reassignment; the originator never does. A discussion
+thread member list is derived from both plus any explicit watchers
+plus all commanders.
+
+A slot running `c17 claude-code` will see:
+
+- Its open objectives in the briefing's initial state
+- Lifecycle events for objectives it's assigned or originates
+- Tool description refreshes via `notifications/tools/list_changed`
+  when the open set changes
+- New discussion posts on `obj:<id>` threads it's a member of
+
+Non-assignee slots never see traces or tool_use-level detail of
+another slot's work, even if they're watchers on the objective —
+that's commander-only territory.

@@ -67,8 +67,8 @@ export function Composer({ viewer }: ComposerProps) {
   };
 
   return (
-    <div class="border-t border-brand-border bg-brand-surface px-3 sm:px-4 py-2 flex-shrink-0">
-      {sendError.value && <div class="text-xs text-red-400 mb-1">{sendError.value}</div>}
+    <div class="border-t border-brand-border-subtle bg-brand-surface px-3 sm:px-4 py-3 flex-shrink-0">
+      {sendError.value && <div class="c17-label !text-brand-err mb-2">◆ {sendError.value}</div>}
       <div class="flex items-end gap-2">
         <textarea
           rows={2}
@@ -77,8 +77,8 @@ export function Composer({ viewer }: ComposerProps) {
           onKeyDown={onKeyDown}
           placeholder={
             threadKey === PRIMARY_THREAD
-              ? 'broadcast to #team — enter to send, shift+enter for newline'
-              : `message ${threadKey.slice(3)} — enter to send`
+              ? 'Broadcast to #team — enter to send, shift+enter for newline'
+              : `Message ${threadKey.slice(3)} — enter to send`
           }
           /*
            * `text-base` (16px) on mobile is load-bearing: iOS Safari
@@ -86,15 +86,15 @@ export function Composer({ viewer }: ComposerProps) {
            * Drop to `text-sm` (14px) at sm+ where the mouse-driven
            * layout prefers the denser type.
            */
-          class="flex-1 resize-none bg-brand-bg border border-brand-border rounded px-2 py-1.5 text-base sm:text-sm text-brand-text font-mono focus:outline-none focus:border-brand-primary"
+          class="c17-input flex-1 resize-none text-base sm:text-sm !py-2"
         />
         <button
           type="button"
           onClick={() => void send()}
           disabled={sending.value || draft.value.trim().length === 0}
-          class="px-3 py-2 sm:py-1.5 text-xs rounded bg-brand-primary text-brand-bg font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 flex-shrink-0"
+          class="c17-btn-sm-primary flex-shrink-0"
         >
-          {sending.value ? '…' : 'send'}
+          {sending.value ? '…' : 'Send →'}
         </button>
       </div>
     </div>

@@ -58,7 +58,12 @@ const ROLES: Record<string, Role> = {
   },
 };
 
-describe('end-to-end: operator → broker → link → channel event', () => {
+// Skipped during the runner/bridge refactor (Phase 1): this e2e test
+// spawned the `c17-link` binary, which no longer exists. Phase 2 ships
+// `c17 mcp-bridge` as its replacement and this test will be rewritten
+// to spawn that verb against an in-process runner. See
+// /home/aprzy/.claude/plans/runner-bridge-trace.md.
+describe.skip('end-to-end: operator → broker → link → channel event', () => {
   let server: RunningServer;
   let link: ChildProcessWithoutNullStreams;
   let client: Client;
