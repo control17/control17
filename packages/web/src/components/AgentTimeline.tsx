@@ -35,7 +35,6 @@ import type {
   AnthropicMessagesEntry,
 } from '@control17/sdk/types';
 import { signal } from '@preact/signals';
-import { highlightXmlTags } from '../lib/channel-highlight.js';
 import {
   agentActivityConnected,
   agentActivityExhausted,
@@ -43,6 +42,7 @@ import {
   agentActivityRows,
   loadOlderAgentActivity,
 } from '../lib/agent-activity.js';
+import { highlightXmlTags } from '../lib/channel-highlight.js';
 import { selectObjectiveDetail } from '../lib/view.js';
 
 type KindFilter = Record<AgentActivityEvent['kind'], boolean>;

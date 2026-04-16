@@ -85,23 +85,27 @@ export function renderInlineMarkdown(body: string): string {
  */
 function renderXmlTags(html: string): string {
   return html.replace(
-    /&lt;([a-zA-Z][\w.-]*)(\s[^]*?)&gt;([^]*?)&lt;\/\1&gt;/g,
+    /&lt;([a-zA-Z][\w.-]*)(\s[\s\S]*?)&gt;([\s\S]*?)&lt;\/\1&gt;/g,
     (_match, tagName: string, attrs: string, body: string) => {
       const coloredAttrs = attrs.replace(
-        /([\w.-]+)=(&quot;[^]*?&quot;|&amp;quot;[^]*?&amp;quot;|&#39;[^]*?&#39;|\S+)/g,
+        /([\w.-]+)=(&quot;[\s\S]*?&quot;|&amp;quot;[\s\S]*?&amp;quot;|&#39;[\s\S]*?&#39;|\S+)/g,
         '<span class="c17-ch-attr">$1</span>=<span class="c17-ch-val">$2</span>',
       );
       return (
         '<span class="c17-channel-tag">' +
         '<span class="c17-ch-bracket">&lt;</span>' +
-        '<span class="c17-ch-name">' + tagName + '</span>' +
+        '<span class="c17-ch-name">' +
+        tagName +
+        '</span>' +
         coloredAttrs +
         '<span class="c17-ch-bracket">&gt;</span>' +
         '<div class="c17-ch-body">' +
         body +
         '</div>' +
         '<span class="c17-ch-bracket">&lt;/</span>' +
-        '<span class="c17-ch-name">' + tagName + '</span>' +
+        '<span class="c17-ch-name">' +
+        tagName +
+        '</span>' +
         '<span class="c17-ch-bracket">&gt;</span>' +
         '</span>'
       );

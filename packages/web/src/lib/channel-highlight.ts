@@ -34,21 +34,25 @@ export function highlightXmlTags(text: string): string | null {
     const body = match[3] ?? '';
 
     const coloredAttrs = escapeHtml(attrs).replace(
-      /(\w[\w.-]*)=(&quot;[^]*?&quot;|\S+)/g,
+      /(\w[\w.-]*)=(&quot;[\s\S]*?&quot;|\S+)/g,
       '<span class="c17-ch-attr">$1</span>=<span class="c17-ch-val">$2</span>',
     );
 
     result +=
       '<span class="c17-channel-tag">' +
       '<span class="c17-ch-bracket">&lt;</span>' +
-      '<span class="c17-ch-name">' + escapeHtml(tagName) + '</span>' +
+      '<span class="c17-ch-name">' +
+      escapeHtml(tagName) +
+      '</span>' +
       coloredAttrs +
       '<span class="c17-ch-bracket">&gt;</span>' +
       '<div class="c17-ch-body">' +
       escapeHtml(body) +
       '</div>' +
       '<span class="c17-ch-bracket">&lt;/</span>' +
-      '<span class="c17-ch-name">' + escapeHtml(tagName) + '</span>' +
+      '<span class="c17-ch-name">' +
+      escapeHtml(tagName) +
+      '</span>' +
       '<span class="c17-ch-bracket">&gt;</span>' +
       '</span>';
 
