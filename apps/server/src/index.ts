@@ -195,6 +195,7 @@ async function main(): Promise<void> {
     squadron,
     roles,
     https,
+    configPath,
     configDir: dirname(configPath),
     port,
     host,
