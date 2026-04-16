@@ -40,6 +40,22 @@ export interface TraceHostOptions {
    * runs.
    */
   caCertPath?: string;
+  /**
+   * Opt-in escape hatch: set `NODE_TLS_REJECT_UNAUTHORIZED=0` on the
+   * agent child. Only useful for packaged-binary Node distributions
+   * (pkg / sea / yao-pkg) that ship their own bundled cert store
+   * which `NODE_EXTRA_CA_CERTS` cannot extend.
+   *
+   * **Do not enable this for normal Claude installs.** Disables
+   * ALL TLS validation in the agent child process — including upstreams
+   * that bypass the MITM proxy. Present only so a packaged Claude can
+   * still be traced; sunset-dated, to be removed once a kernel-level
+   * interception path (or trust-store injection) lands.
+   *
+   * Default: `false` — the agent child validates TLS normally, trusting
+   * our MITM CA via `NODE_EXTRA_CA_CERTS`.
+   */
+  unsafeTls?: boolean;
   log?: (msg: string, ctx?: Record<string, unknown>) => void;
 }
 
@@ -130,20 +146,21 @@ export async function startTraceHost(options: TraceHostOptions): Promise<TraceHo
       const mergedNoProxy = existingNoProxy
         ? `${existingNoProxy},${noProxyHosts.join(',')}`
         : noProxyHosts.join(',');
-      return {
+      const env: Record<string, string> = {
         HTTPS_PROXY: proxy.proxyUrl,
         HTTP_PROXY: proxy.proxyUrl,
         ALL_PROXY: proxy.proxyUrl,
         NO_PROXY: mergedNoProxy,
         NODE_USE_ENV_PROXY: '1',
         NODE_EXTRA_CA_CERTS: caCertPath,
-        // Packaged-binary Node distributions (pkg, sea, yao-pkg)
-        // sometimes ship their own bundled cert store that
-        // NODE_EXTRA_CA_CERTS can't extend. Disabling cert
-        // validation in the child is the failsafe — scoped to
-        // this loopback runner session only.
-        NODE_TLS_REJECT_UNAUTHORIZED: '0',
       };
+      if (options.unsafeTls === true) {
+        // Opt-in escape hatch for packaged-binary Node distros that
+        // can't pick up `NODE_EXTRA_CA_CERTS`. Disables ALL TLS
+        // validation in the child; operator opted in via --unsafe-tls.
+        env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      }
+      return env;
     },
     noteObjectiveOpen(objectiveId) {
       uploader.enqueue({

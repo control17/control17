@@ -79,6 +79,13 @@ export interface ClaudeCodeCommandInput {
    * environment untouched. `c17 claude-code --no-trace` sets this.
    */
   noTrace?: boolean;
+  /**
+   * Opt-in escape hatch for packaged-binary Claude distributions that
+   * can't honor `NODE_EXTRA_CA_CERTS`. When true, `NODE_TLS_REJECT_UNAUTHORIZED=0`
+   * is set on the agent child, disabling all TLS validation there.
+   * `c17 claude-code --unsafe-tls` sets this. Default false.
+   */
+  unsafeTls?: boolean;
 }
 
 function defaultLog(msg: string, ctx: Record<string, unknown> = {}): void {
@@ -120,7 +127,13 @@ export async function runClaudeCodeCommand(input: ClaudeCodeCommandInput): Promi
   //    yet either, so a failure here just propagates cleanly.
   let runner: RunnerHandle;
   try {
-    runner = await startRunner({ url, token, log, noTrace: input.noTrace });
+    runner = await startRunner({
+      url,
+      token,
+      log,
+      noTrace: input.noTrace,
+      unsafeTls: input.unsafeTls,
+    });
   } catch (err) {
     if (err instanceof RunnerStartupError) {
       throw new UsageError(err.message);
@@ -223,8 +236,23 @@ export async function runClaudeCodeCommand(input: ClaudeCodeCommandInput): Promi
     log('claude-code: trace host armed', {
       proxy: runner.traceHost.proxy.proxyUrl,
       caCert: runner.traceHost.caCertPath,
-      warning: 'NODE_TLS_REJECT_UNAUTHORIZED=0 is set on the child — loopback only',
+      unsafeTls: input.unsafeTls === true,
     });
+    if (input.unsafeTls === true) {
+      // Prominent, unstructured warning to the operator's terminal.
+      // Structured log above feeds telemetry; this line hits stderr
+      // in plain text so it can't be missed in a scrollback review.
+      process.stderr.write(
+        '\n' +
+          '  ┌─ UNSAFE-TLS MODE ──────────────────────────────────────────┐\n' +
+          '  │ --unsafe-tls enabled: NODE_TLS_REJECT_UNAUTHORIZED=0 is    │\n' +
+          '  │ set on the agent child. ALL TLS validation is off for the  │\n' +
+          '  │ entire agent process — not just the MITM proxy leg.        │\n' +
+          '  │ Use only when claude is a packaged binary that cannot      │\n' +
+          '  │ honor NODE_EXTRA_CA_CERTS. Sunset-dated.                   │\n' +
+          '  └────────────────────────────────────────────────────────────┘\n\n',
+      );
+    }
   }
 
   // Auto-inject the two `--dangerously-*` flags that c17's

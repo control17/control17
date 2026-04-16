@@ -77,10 +77,28 @@ describe('TraceHost', () => {
       expect(env.HTTPS_PROXY?.startsWith('http://')).toBe(true);
       expect(env.NODE_USE_ENV_PROXY).toBe('1');
       expect(env.NODE_EXTRA_CA_CERTS).toBe(caCertPath);
-      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('0');
+      // Default posture: TLS validation stays ON in the agent child.
+      // The MITM CA is trusted via NODE_EXTRA_CA_CERTS; bypass is opt-in only.
+      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
       expect(env.NO_PROXY).toContain('127.0.0.1');
       expect(env.NO_PROXY).toContain('localhost');
       expect(env.NO_PROXY).toContain('::1');
+    } finally {
+      await host.close();
+    }
+  });
+
+  it('envVars sets NODE_TLS_REJECT_UNAUTHORIZED=0 only when unsafeTls is opted in', async () => {
+    const host = await startTraceHost({
+      log: () => {},
+      caCertPath: join(tmpDir, 'unsafe-ca.pem'),
+      brokerClient: stubBrokerClient(),
+      callsign: 'TEST',
+      unsafeTls: true,
+    });
+    try {
+      const env = host.envVars({});
+      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('0');
     } finally {
       await host.close();
     }

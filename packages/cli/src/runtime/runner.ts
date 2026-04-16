@@ -97,6 +97,14 @@ export interface RunnerOptions {
    * sets this to `true`.
    */
   noTrace?: boolean;
+  /**
+   * Opt-in escape hatch for packaged-binary Claude distributions that
+   * can't honor `NODE_EXTRA_CA_CERTS`. When `true`, the trace host
+   * sets `NODE_TLS_REJECT_UNAUTHORIZED=0` on the agent child. Default
+   * `false` — the agent child validates TLS normally. See
+   * `TraceHostOptions.unsafeTls` for the full rationale.
+   */
+  unsafeTls?: boolean;
 }
 
 export interface RunnerHandle {
@@ -193,6 +201,7 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
         brokerClient,
         callsign: briefing.callsign,
         log,
+        unsafeTls: options.unsafeTls === true,
       });
     } catch (err) {
       log('runner: trace host failed to start — continuing without tracing', {

@@ -42,7 +42,7 @@ usage:
   c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
   c17 quickstart  [--skip-browser] [--assignee <callsign>]   seed a demo objective + open the web UI
   c17 telemetry   enable|disable|preview|rotate|status       opt-in, zero-PII, off-by-default install telemetry
-  c17 claude-code [--no-trace] [--doctor] [--skip-doctor] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
+  c17 claude-code [--no-trace] [--doctor] [--skip-doctor] [--unsafe-tls] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
   c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
   c17 roster                        list slots, authority, and connection state
   c17 objectives  list|view|create|update|complete|cancel|reassign   squadron objectives
@@ -429,6 +429,7 @@ async function handleClaudeCode(args: string[]): Promise<void> {
   let noTrace = false;
   let doctor = false;
   let skipDoctor = false;
+  let unsafeTls = false;
   const claudeArgs: string[] = [];
   let seenDashDash = false;
 
@@ -457,6 +458,10 @@ async function handleClaudeCode(args: string[]): Promise<void> {
     }
     if (arg === '--skip-doctor') {
       skipDoctor = true;
+      continue;
+    }
+    if (arg === '--unsafe-tls') {
+      unsafeTls = true;
       continue;
     }
     if (arg === '--url' || arg === '--token') {
@@ -501,7 +506,7 @@ async function handleClaudeCode(args: string[]): Promise<void> {
   }
 
   try {
-    const code = await runClaudeCodeCommand({ url, token, claudeArgs, noTrace });
+    const code = await runClaudeCodeCommand({ url, token, claudeArgs, noTrace, unsafeTls });
     process.exit(code);
   } catch (err) {
     if (err instanceof UsageError) fail(err.message, 2);

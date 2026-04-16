@@ -47,7 +47,38 @@ export async function runDoctor(): Promise<DoctorReport> {
   checks.push(await checkTmpdir());
   checks.push(await checkLoopbackBind());
   checks.push(checkCaGeneration());
+  checks.push(checkTlsPosture());
   return { checks, anyFail: checks.some((c) => c.status === 'FAIL') };
+}
+
+/**
+ * Report TLS-validation posture in the current runtime. Warns if
+ * `NODE_TLS_REJECT_UNAUTHORIZED=0` is already in the doctor
+ * process's env — that means either the operator is running doctor
+ * inside an `--unsafe-tls` session, or they've set the env var
+ * manually (which the runner used to do unconditionally and no
+ * longer does). Either way it's a posture the operator should see
+ * surfaced rather than silent.
+ */
+function checkTlsPosture(): DoctorCheck {
+  const envVal = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  if (envVal === '0') {
+    return {
+      name: 'TLS validation posture',
+      status: 'WARN',
+      detail:
+        'NODE_TLS_REJECT_UNAUTHORIZED=0 is set in the current environment. ' +
+        'The `c17 claude-code` runner no longer sets this by default. ' +
+        'If you opted in via `--unsafe-tls` because Claude is a packaged binary, ' +
+        'this is expected. Otherwise it is a stale env var from an older runner ' +
+        'or an unrelated tool and should be unset.',
+    };
+  }
+  return {
+    name: 'TLS validation posture',
+    status: 'PASS',
+    detail: 'NODE_TLS_REJECT_UNAUTHORIZED not disabled; agent child will validate TLS normally',
+  };
 }
 
 async function checkClaude(): Promise<DoctorCheck> {
