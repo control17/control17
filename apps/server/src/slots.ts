@@ -514,6 +514,93 @@ export function writeWebPushConfig(path: string, webPush: WebPushConfig): void {
 }
 
 /**
+ * Generate a fresh cryptorandom bearer token in the same
+ * `c17_<base64url>` format the wizard uses. 32 raw bytes → 43-char
+ * base64url payload (~256 bits of entropy).
+ */
+export function generateSlotToken(): string {
+  return `c17_${randomBytes(32).toString('base64url')}`;
+}
+
+/**
+ * Rotate the bearer token for `callsign`. Generates a fresh
+ * cryptorandom plaintext token, hashes it, atomically rewrites the
+ * config file, and returns the NEW PLAINTEXT so the caller can show
+ * it to the operator once. The plaintext is never persisted; only
+ * its hash lands on disk.
+ *
+ * Safety posture:
+ *   - Atomic: temp-file + rename inside the config directory.
+ *   - 0o600 on the result (same as writeSquadronConfig).
+ *   - Defensive reload + re-parse of the file, so a concurrent hand
+ *     edit elsewhere in the same file doesn't get trampled.
+ *   - Preserves every other slot's `totpSecret` / `totpLastCounter` /
+ *     `authority` / `role` untouched.
+ */
+export function rotateSlotToken(path: string, callsign: string): string {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw new ConfigNotFoundError(path);
+    throw new SlotLoadError(`failed to read config file at ${path}: ${(err as Error).message}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new SlotLoadError(`config file at ${path} is not valid JSON: ${(err as Error).message}`);
+  }
+  const result = SquadronConfigSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new SlotLoadError(`config file at ${path} is invalid — cannot rotate`);
+  }
+  const target = result.data.slots.find((s) => s.callsign === callsign);
+  if (!target) {
+    throw new SlotLoadError(`no slot with callsign '${callsign}' in ${path}`);
+  }
+
+  const newToken = generateSlotToken();
+  const newHash = hashToken(newToken);
+
+  const onDisk: SlotOnDisk[] = result.data.slots.map((s) => {
+    if (s.callsign === callsign) {
+      return {
+        callsign: s.callsign,
+        role: s.role,
+        authority: s.authority,
+        tokenHash: newHash,
+        totpSecret: s.totpSecret ?? null,
+        totpLastCounter: s.totpLastCounter ?? 0,
+      };
+    }
+    return {
+      callsign: s.callsign,
+      role: s.role,
+      authority: s.authority,
+      tokenHash: s.tokenHash ?? hashToken(s.token as string),
+      totpSecret: s.totpSecret ?? null,
+      totpLastCounter: s.totpLastCounter ?? 0,
+    };
+  });
+
+  const topComment =
+    typeof result.data._comment === 'string' ? result.data._comment : CONFIG_FILE_COMMENT;
+  writeSquadronConfigFile(
+    path,
+    topComment,
+    result.data.squadron,
+    result.data.roles,
+    onDisk,
+    result.data.https,
+    result.data.webPush,
+  );
+
+  return newToken;
+}
+
+/**
  * Rewrite the config file at `path` with a new TOTP secret for
  * `callsign`. Used by the CLI `c17 enroll` command and by the wizard.
  */

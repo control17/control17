@@ -7,8 +7,10 @@ import {
   ConfigNotFoundError,
   createSlotStore,
   defaultConfigPath,
+  generateSlotToken,
   hashToken,
   loadSquadronConfigFromFile,
+  rotateSlotToken,
   SlotLoadError,
   TOKEN_HASH_PREFIX,
   writeSquadronConfig,
@@ -53,6 +55,123 @@ const SAMPLE_ROLES: Record<string, Role> = {
     instructions: 'Ship work.',
   },
 };
+
+// ── generateSlotToken ────────────────────────────────────────────────
+
+describe('generateSlotToken', () => {
+  it('returns a c17_-prefixed base64url token', () => {
+    const t = generateSlotToken();
+    expect(t.startsWith('c17_')).toBe(true);
+    expect(t.slice(4)).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('produces unique tokens across calls', () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      seen.add(generateSlotToken());
+    }
+    expect(seen.size).toBe(100);
+  });
+
+  it('has at least 256 bits of entropy in the payload (43+ base64url chars)', () => {
+    const t = generateSlotToken();
+    expect(t.slice(4).length).toBeGreaterThanOrEqual(43);
+  });
+});
+
+// ── rotateSlotToken ─────────────────────────────────────────────────
+
+describe('rotateSlotToken', () => {
+  function seedConfig(): { path: string; originalHashes: Record<string, string> } {
+    const dir = tmpDir();
+    const path = join(dir, 'control17.json');
+    writeSquadronConfig(
+      path,
+      SAMPLE_SQUADRON,
+      SAMPLE_ROLES,
+      [
+        { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'original-a' },
+        { callsign: 'LT-ONE', role: 'operator', authority: 'lieutenant', token: 'original-b' },
+        {
+          callsign: 'ALPHA-1',
+          role: 'implementer',
+          token: 'original-c',
+          totpSecret: 'ABCDEFGHIJKLMNOP',
+          totpLastCounter: 42,
+        },
+      ],
+    );
+    return {
+      path,
+      originalHashes: {
+        ACTUAL: hashToken('original-a'),
+        'LT-ONE': hashToken('original-b'),
+        'ALPHA-1': hashToken('original-c'),
+      },
+    };
+  }
+
+  it('returns a new c17_-prefixed plaintext token', () => {
+    const { path } = seedConfig();
+    const newToken = rotateSlotToken(path, 'ACTUAL');
+    expect(newToken.startsWith('c17_')).toBe(true);
+    expect(newToken.slice(4).length).toBeGreaterThanOrEqual(43);
+  });
+
+  it('invalidates the old bearer token for that slot', () => {
+    const { path } = seedConfig();
+    rotateSlotToken(path, 'ACTUAL');
+    const config = loadSquadronConfigFromFile(path);
+    expect(config.store.resolve('original-a')).toBeNull();
+  });
+
+  it('accepts the new plaintext against the updated hash', () => {
+    const { path } = seedConfig();
+    const newToken = rotateSlotToken(path, 'ACTUAL');
+    const config = loadSquadronConfigFromFile(path);
+    const slot = config.store.resolve(newToken);
+    expect(slot?.callsign).toBe('ACTUAL');
+  });
+
+  it('does not affect other slots', () => {
+    const { path, originalHashes } = seedConfig();
+    rotateSlotToken(path, 'ACTUAL');
+    const config = loadSquadronConfigFromFile(path);
+
+    // LT-ONE and ALPHA-1 still resolve against their original tokens.
+    expect(config.store.resolve('original-b')?.callsign).toBe('LT-ONE');
+    expect(config.store.resolve('original-c')?.callsign).toBe('ALPHA-1');
+
+    // And their on-disk hashes are unchanged from pre-rotation.
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as {
+      slots: Array<{ callsign: string; tokenHash: string }>;
+    };
+    const ltOne = raw.slots.find((s) => s.callsign === 'LT-ONE');
+    const alpha = raw.slots.find((s) => s.callsign === 'ALPHA-1');
+    expect(ltOne?.tokenHash).toBe(originalHashes['LT-ONE']);
+    expect(alpha?.tokenHash).toBe(originalHashes['ALPHA-1']);
+  });
+
+  it('preserves TOTP state on the rotated slot', () => {
+    const { path } = seedConfig();
+    rotateSlotToken(path, 'ALPHA-1');
+    const config = loadSquadronConfigFromFile(path);
+    const slot = config.store.resolveByCallsign('ALPHA-1');
+    expect(slot?.totpSecret).toBe('ABCDEFGHIJKLMNOP');
+    expect(slot?.totpLastCounter).toBe(42);
+  });
+
+  it('throws SlotLoadError on unknown callsign', () => {
+    const { path } = seedConfig();
+    expect(() => rotateSlotToken(path, 'GHOST')).toThrow(SlotLoadError);
+  });
+
+  it('throws ConfigNotFoundError when the file does not exist', () => {
+    expect(() => rotateSlotToken(join(tmpDir(), 'does-not-exist.json'), 'ACTUAL')).toThrow(
+      ConfigNotFoundError,
+    );
+  });
+});
 
 // ── hashToken ────────────────────────────────────────────────────────
 

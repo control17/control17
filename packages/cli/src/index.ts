@@ -30,6 +30,7 @@ import { runObjectivesCommand } from './commands/objectives.js';
 import { type PushCommandInput, runPushCommand } from './commands/push.js';
 import { QuickstartError, runQuickstartCommand } from './commands/quickstart.js';
 import { runRosterCommand } from './commands/roster.js';
+import { runRotateCommand } from './commands/rotate.js';
 import { runServeCommand } from './commands/serve.js';
 import { runSetupCommand } from './commands/setup.js';
 import { runTelemetryCommand, type TelemetryEventKind } from './commands/telemetry.js';
@@ -40,6 +41,7 @@ const USAGE = `control17 cli v${CLI_VERSION}
 usage:
   c17 setup       [--config-path <path>]            first-run wizard (squadron + slots + TOTP)
   c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
+  c17 rotate      --slot <callsign> [--config-path <path>]   rotate a slot's bearer token (atomic; prints new token once)
   c17 quickstart  [--skip-browser] [--assignee <callsign>]   seed a demo objective + open the web UI
   c17 telemetry   enable|disable|preview|rotate|status       opt-in, zero-PII, off-by-default install telemetry
   c17 claude-code [--no-trace] [--doctor] [--skip-doctor] [--unsafe-tls] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
@@ -103,6 +105,9 @@ async function main(): Promise<void> {
       return;
     case 'enroll':
       await handleEnroll(rest);
+      return;
+    case 'rotate':
+      await handleRotate(rest);
       return;
     case 'quickstart':
       await handleQuickstart(rest);
@@ -172,6 +177,32 @@ async function handleEnroll(args: string[]): Promise<void> {
 
   try {
     await runEnrollCommand(
+      {
+        slot: getString(values, 'slot'),
+        configPath: getString(values, 'config-path') ?? getString(values, 'config'),
+      },
+      (line) => log(line),
+    );
+  } catch (err) {
+    if (err instanceof UsageError) fail(err.message, 2);
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleRotate(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    slot: { type: 'string', short: 's' },
+    'config-path': { type: 'string' },
+    config: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+
+  try {
+    await runRotateCommand(
       {
         slot: getString(values, 'slot'),
         configPath: getString(values, 'config-path') ?? getString(values, 'config'),
