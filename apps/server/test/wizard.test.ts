@@ -57,13 +57,13 @@ describe('runFirstRunWizard', () => {
     const configPath = tmpConfigPath();
     let tokenCounter = 0;
     const io = mockIO([
-      // squadron name (default alpha-squadron)
+      // squadron name (default my-team)
       '',
       // mission (required)
       'Ship the payment service',
       // brief (empty)
       '',
-      // slot 1: callsign (default ACTUAL)
+      // slot 1: callsign (default operator-1)
       '',
       // slot 1: role (default operator)
       '',
@@ -86,10 +86,10 @@ describe('runFirstRunWizard', () => {
 
     expect(config.store.size()).toBe(1);
     const actual = config.store.resolve('c17_test_token_1');
-    expect(actual?.callsign).toBe('ACTUAL');
+    expect(actual?.callsign).toBe('operator-1');
     expect(actual?.role).toBe('operator');
     expect(actual?.authority).toBe('commander');
-    expect(config.squadron.name).toBe('alpha-squadron');
+    expect(config.squadron.name).toBe('my-team');
     expect(config.squadron.mission).toBe('Ship the payment service');
     expect(config.squadron.brief).toBe('');
 
@@ -98,10 +98,10 @@ describe('runFirstRunWizard', () => {
       roles: Record<string, { description?: string; instructions?: string }>;
       slots: Array<{ callsign: string; role: string; authority?: string; tokenHash: string }>;
     };
-    expect(onDisk.squadron.name).toBe('alpha-squadron');
+    expect(onDisk.squadron.name).toBe('my-team');
     expect(onDisk.squadron.mission).toBe('Ship the payment service');
     expect(onDisk.slots).toHaveLength(1);
-    expect(onDisk.slots[0]?.callsign).toBe('ACTUAL');
+    expect(onDisk.slots[0]?.callsign).toBe('operator-1');
     expect(onDisk.slots[0]?.role).toBe('operator');
     expect(onDisk.slots[0]?.authority).toBe('commander');
     expect(onDisk.slots[0]?.tokenHash).toMatch(/^sha256:/);
@@ -117,7 +117,7 @@ describe('runFirstRunWizard', () => {
     // File can be re-loaded round-trip.
     const reloaded = loadSquadronConfigFromFile(configPath);
     const reloadedSlot = reloaded.store.resolve('c17_test_token_1');
-    expect(reloadedSlot?.callsign).toBe('ACTUAL');
+    expect(reloadedSlot?.callsign).toBe('operator-1');
     expect(reloadedSlot?.authority).toBe('commander');
   });
 

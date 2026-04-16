@@ -212,10 +212,7 @@ export function createCertPool(ca: TraceCa): CertPool {
       { name: 'organizationName', value: 'control17 trace' },
     ]);
     leafCert.setIssuer(ca.caCert.subject.attributes);
-    // biome-ignore lint/suspicious/noExplicitAny: node-forge's
-    // extension shape for subjectAltName uses numeric `type`
-    // discriminators that don't fit its public TS types.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // biome-ignore lint/suspicious/noExplicitAny: node-forge's subjectAltName uses numeric `type` discriminators that don't fit its public TS types.
     const exts: any = [
       { name: 'basicConstraints', cA: false, critical: true },
       {
