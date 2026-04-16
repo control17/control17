@@ -51,7 +51,7 @@ team channel, DM threads, Web Push notifications.
 ## Quick start
 
 ```bash
-npm install -g @control17/cli @control17/server
+npm install -g @control17/c17
 
 # First run triggers the setup wizard —
 # creates your team, slots, authority tiers, and TOTP enrollment.
@@ -153,13 +153,22 @@ real TLS cert.
 
 ## Install
 
-```bash
-# Everything in one command
-npm install -g @control17/c17
+The meta-package is the recommended install path — it pulls in the
+operator CLI, the broker, and the built-in web UI, and ships both
+`c17` and `c17-server` bins at the same version.
 
-# Or pick what you need
-npm install -g @control17/cli       # operator terminal (c17 claude-code, c17 push, etc.)
-npm install -g @control17/server    # self-hosted broker (includes the web UI)
+```bash
+npm install -g @control17/c17
+```
+
+Advanced: if you know you only need one surface (e.g. operator tooling
+on a laptop that talks to a remote broker), you can install the
+à-la-carte packages directly. Most operators should ignore this and use
+the meta-package — it's what the docs and the wizard assume.
+
+```bash
+npm install -g @control17/cli       # operator CLI only (c17 claude-code, c17 push, ...)
+npm install -g @control17/server    # self-hosted broker + built-in web UI only
 ```
 
 ## Packages
