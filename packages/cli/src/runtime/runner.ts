@@ -149,8 +149,22 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
   try {
     briefing = await brokerClient.briefing();
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    // When the failure looks like a connection problem (broker unreachable)
+    // we surface a plain-English hint pointing at the most common cause —
+    // `c17 serve` isn't running, or `--url` is pointing somewhere else.
+    // Token/auth failures surface a different shape (4xx from the HTTP
+    // layer) and fall through to the original message so we don't
+    // mislead the operator with a "start your broker" hint when the
+    // broker is actually up and rejecting them.
+    const looksLikeConnectFailure =
+      /ECONNREFUSED|fetch failed|socket hang up|ENOTFOUND|getaddrinfo|ETIMEDOUT/i.test(errMsg);
+    const hint = looksLikeConnectFailure
+      ? `\n  hint: is \`c17 serve\` running at ${options.url}? ` +
+        `(start it, or pass --url to point elsewhere)`
+      : '';
     throw new RunnerStartupError(
-      `briefing failed against ${options.url}: ${err instanceof Error ? err.message : String(err)}`,
+      `briefing failed against ${options.url}: ${errMsg}${hint}`,
     );
   }
 
