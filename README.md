@@ -5,8 +5,6 @@ every slot a callsign + role + authority level, push-assign objectives
 to agents, and watch the LLM traces flow back to the operator in
 real time.
 
-> Early scaffolding. Not ready for use.
-
 ## What it is
 
 control17 is a command-and-control plane for AI agent teams. It gives
@@ -25,7 +23,7 @@ you three things working together:
    (transparent to the upstream — we're a real TLS client on that
    leg), parsed as HTTP/1.1, extracted into the Anthropic API shape
    (model, messages, tool_use, tool_result, usage), redacted for
-   secrets, and uploaded to the server for commander review. No
+   secrets, and streamed to the server for commander review. No
    tshark, no pcap, no SSLKEYLOGFILE — just Node's built-in
    `tls` + `crypto` modules.
 
@@ -149,9 +147,6 @@ Bring the server up in tier 1 or 2 and front it with:
 - **Reverse proxy (nginx / Caddy)** — terminate TLS upstream and
   proxy to `http://127.0.0.1:8717`.
 
-ACME / Let's Encrypt support is planned but deferred; the tunnel and
-reverse-proxy paths cover today's use cases.
-
 ## Install
 
 ```bash
@@ -185,7 +180,7 @@ missing.
 ## Requirements
 
 - Node.js 22+
-- pnpm 10+
+- pnpm 10+ (for development)
 - (Optional) `claude` on PATH or pointed to via `$CLAUDE_PATH`, if
   you plan to run `c17 claude-code`.
 
@@ -196,27 +191,15 @@ signing (bundled with the cli).
 ## Getting started
 
 ```bash
-pnpm install
-pnpm build
-pnpm test
-```
-
-Run a squadron locally:
-
-```bash
 # 1. First-run wizard: squadron + slots + authority + TOTP enrollment.
-#    Writes ./control17.json at the repo root with 0o600.
-pnpm wizard
+#    Writes ./control17.json with 0o600.
+c17 serve          # triggers wizard on first run
 
-# 2. Watch-mode server + Vite dev. The server picks up ./control17.json
-#    automatically; Vite on :5173 proxies API calls to :8717.
-pnpm dev
-
-# 3. Open the web UI. Log in with your slot callsign + a fresh 6-digit
+# 2. Open the web UI. Log in with your slot callsign + a fresh 6-digit
 #    TOTP code from your authenticator app.
-open http://127.0.0.1:5173
+open http://127.0.0.1:8717
 
-# 4. Wrap a claude session with the runner. Trace capture on by default
+# 3. Wrap a claude session with the runner. Trace capture on by default
 #    — use --no-trace to disable. Use --doctor to preflight-check the
 #    environment (claude binary, $TMPDIR, loopback bind, CA generation).
 export C17_TOKEN=c17_your_slot_token
@@ -224,10 +207,88 @@ c17 claude-code --doctor
 c17 claude-code
 ```
 
-Full docs: [docs/architecture.md](./docs/architecture.md),
-[docs/getting-started.mdx](./docs/getting-started.mdx),
-[docs/concepts/objectives.mdx](./docs/concepts/objectives.mdx),
-[docs/tracing.mdx](./docs/tracing.mdx).
+## Development
+
+### Building from source
+
+```bash
+git clone https://github.com/control17/control17.git
+cd control17
+pnpm install
+pnpm build
+pnpm test          # 332 tests across server, cli, and web
+```
+
+### Dev loop
+
+```bash
+# Terminal 1 — watch-mode server + Vite dev proxy
+#   First run triggers the squadron setup wizard.
+#   Server on :8717, Vite on :5173 with API proxy.
+pnpm dev
+
+# Terminal 2 — open the web UI
+open http://127.0.0.1:5173
+```
+
+### Running a test agent
+
+The runner writes `.mcp.json` in its process CWD and spawns claude
+with that CWD inherited — **where you invoke it matters**. A shell
+alias pointing at the built cli is the easiest way to iterate:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc (adjust the path for your checkout):
+alias c17-dev='node ~/path/to/control17/packages/cli/dist/index.js'
+```
+
+Then from any scratch directory:
+
+```bash
+mkdir -p ~/scratch/test-alpha && cd ~/scratch/test-alpha
+export C17_TOKEN=c17_your_slot_token
+c17-dev claude-code --doctor    # preflight check
+c17-dev claude-code             # wrap a claude session
+```
+
+`c17 claude-code` auto-injects two flags into the claude invocation:
+
+- `--dangerously-skip-permissions` — c17's tools live behind the
+  squadron authority model, not per-call permission prompts.
+- `--dangerously-load-development-channels server:c17` — enables
+  claude's `claude/channel` experimental capability against the
+  bridge.
+
+Both are de-duped if you also pass them explicitly. Additional claude
+flags go after `--`:
+
+```bash
+c17-dev claude-code -- --model opus --continue
+```
+
+### CLAUDE.md guard for test workspaces
+
+Claude Code walks up the directory tree reading every `CLAUDE.md` it
+finds. If your test workspace is inside the control17 repo, a blank
+`CLAUDE.md` in the parent of the workspace directory prevents the
+repo root's instructions from leaking into the test session.
+
+### Cleaning up
+
+The runner restores `.mcp.json` on every exit path (normal, signal,
+crash). If something crashes mid-run, look for runtime artifacts
+under `/tmp/c17-runner-*` and `/tmp/c17-trace-ca-*`.
+
+## Docs
+
+- [architecture.md](./docs/architecture.md) — full walkthrough of the
+  runner/bridge split, IPC protocol, MITM proxy, and identity model
+- [getting-started.mdx](./docs/getting-started.mdx) — step-by-step
+  first-run guide
+- [concepts/objectives.mdx](./docs/concepts/objectives.mdx) — how
+  push-assigned work flows end-to-end
+- [tracing.mdx](./docs/tracing.mdx) — trace capture setup, decode
+  pipeline, security posture, and what's redacted
 
 ## License
 
