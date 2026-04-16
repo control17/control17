@@ -60,6 +60,17 @@ export async function runEnrollCommand(
   const server = await loadServerModule();
   const configPath = input.configPath ?? process.env[ENV.configPath] ?? server.defaultConfigPath();
 
+  // Install the KEK before loading so enc-v1 fields round-trip
+  // through the enroll + config-rewrite path.
+  try {
+    server.setKek(server.resolveKek(configPath));
+  } catch (err) {
+    if (err instanceof server.KekResolutionError) {
+      throw new UsageError(`enroll: ${err.message}`);
+    }
+    throw err;
+  }
+
   // Load the existing config. Any failure here (missing, invalid)
   // gets mapped to a user-facing UsageError so the raw SlotLoadError
   // stack doesn't surface.

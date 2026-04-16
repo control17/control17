@@ -53,9 +53,47 @@ import {
 import { dirname, join } from 'node:path';
 import type { Authority, Role, Slot, Squadron, Teammate } from '@control17/sdk/types';
 import { z } from 'zod';
+import { decryptField, ENCRYPTED_FIELD_PREFIX, encryptField } from './kek.js';
 
 export const TOKEN_HASH_PREFIX = 'sha256:';
 const DEFAULT_CONFIG_FILENAME = 'control17.json';
+
+/**
+ * Process-wide KEK for TOTP secret + VAPID private key encryption
+ * at rest. Set once at server boot via `setKek` (called from
+ * `runServer`), read by the slot writers/loaders.
+ *
+ * Null means encryption is disabled — legacy behavior for tests and
+ * for runtime environments that haven't called `setKek` yet. When
+ * null: loaders return plaintext as-is; writers don't encrypt. When
+ * set: loaders transparently decrypt `enc-v1:...` values to
+ * plaintext in memory, and writers transparently encrypt plaintext
+ * values before JSON.stringify.
+ *
+ * Backwards-compat semantics:
+ *   - A config written by an older version (plaintext totpSecret /
+ *     vapidPrivateKey) loads cleanly when a KEK is set — the loader
+ *     detects plaintext, counts it against the `migrated` field, and
+ *     the writer encrypts on the migration rewrite.
+ *   - A config written by a newer version (enc-v1 values) loads
+ *     cleanly only when the SAME KEK is available. A wrong KEK
+ *     surfaces as a clear authentication error from `decryptField`,
+ *     not a silent corruption.
+ */
+let activeKek: Buffer | null = null;
+
+/**
+ * Set the process-wide KEK. Call once during server startup from
+ * `runServer`. Passing `null` explicitly disables encryption.
+ */
+export function setKek(kek: Buffer | null): void {
+  activeKek = kek;
+}
+
+/** Test-only: read the currently-active KEK (for test setup only). */
+export function getKek(): Buffer | null {
+  return activeKek;
+}
 
 /**
  * Hash a raw bearer token into the on-disk representation.
@@ -90,8 +128,13 @@ const RoleSchema = z.object({
 
 const AuthoritySchema = z.enum(['commander', 'lieutenant', 'operator']);
 
-// Base32 alphabet (RFC 4648) — TOTP secrets from `otpauth` use this.
-const TOTP_SECRET_REGEX = /^[A-Z2-7]+=*$/;
+// Base32 alphabet (RFC 4648) — plaintext TOTP secrets from `otpauth` use this.
+// When at-rest encryption is enabled, the stored value instead has the
+// `enc-v1:<iv>:<tag>:<ct>` shape emitted by `encryptField` — all
+// base64url segments. Either form passes zod validation here; the
+// loader (after zod) uses the `enc-v1:` prefix to decide whether to
+// decrypt or treat as legacy plaintext.
+const TOTP_SECRET_REGEX = /^(?:[A-Z2-7]+=*|enc-v1:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+)$/;
 
 const SlotEntrySchema = z
   .object({
@@ -414,14 +457,33 @@ export function loadSquadronConfigFromFile(path: string): SquadronConfig {
       );
     }
 
-    const totpSecret = entry.totpSecret ?? null;
     const totpLastCounter = entry.totpLastCounter ?? 0;
+
+    // TOTP secret handling. When a KEK is active:
+    //   - enc-v1 values are decrypted to plaintext for the in-memory
+    //     LoadedSlot (so verifyTotpCode has a usable secret).
+    //   - plaintext values (legacy / hand-edited) flow through as-is,
+    //     bump `migrated`, and land as plaintext in `onDisk` — the
+    //     writer encrypts them on the migration rewrite.
+    // When no KEK is active, values pass through unchanged — keeps
+    // tests and KEK-less dev flows working identically to pre-
+    // encryption behavior.
+    const storedTotp = entry.totpSecret ?? null;
+    let totpSecretPlaintext: string | null = storedTotp;
+    if (storedTotp !== null && activeKek !== null) {
+      if (storedTotp.startsWith(ENCRYPTED_FIELD_PREFIX)) {
+        totpSecretPlaintext = decryptField(storedTotp, activeKek);
+      } else {
+        // Plaintext found under an active KEK — migrate.
+        migrated++;
+      }
+    }
 
     store.addHashed(tokenHash, {
       callsign: entry.callsign,
       role: entry.role,
       authority: entry.authority,
-      totpSecret,
+      totpSecret: totpSecretPlaintext,
       totpLastCounter,
     });
     onDisk.push({
@@ -429,13 +491,32 @@ export function loadSquadronConfigFromFile(path: string): SquadronConfig {
       role: entry.role,
       authority: entry.authority,
       tokenHash,
-      totpSecret,
+      // onDisk always holds plaintext; writer encrypts when KEK is active.
+      totpSecret: totpSecretPlaintext,
       totpLastCounter,
     });
   }
 
   const https: HttpsConfig = result.data.https ?? defaultHttpsConfig();
-  const webPush: WebPushConfig | null = result.data.webPush ?? null;
+  let webPush: WebPushConfig | null = result.data.webPush ?? null;
+
+  // VAPID private key encryption follows the same at-rest story as
+  // TOTP secrets. A PEM private key is always multi-line with dashes;
+  // `enc-v1:...` is single-line. Same migration detection pattern.
+  if (webPush !== null && activeKek !== null) {
+    if (webPush.vapidPrivateKey.startsWith(ENCRYPTED_FIELD_PREFIX)) {
+      const decrypted = decryptField(webPush.vapidPrivateKey, activeKek);
+      if (decrypted === null) {
+        throw new SlotLoadError(
+          `webPush.vapidPrivateKey in ${path} decrypted to null (should not happen)`,
+        );
+      }
+      webPush = { ...webPush, vapidPrivateKey: decrypted };
+    } else {
+      // Plaintext PEM — migrate.
+      migrated++;
+    }
+  }
 
   if (migrated > 0) {
     const topComment =
@@ -511,6 +592,93 @@ export function writeWebPushConfig(path: string, webPush: WebPushConfig): void {
     parsed.https,
     webPush,
   );
+}
+
+/**
+ * Generate a fresh cryptorandom bearer token in the same
+ * `c17_<base64url>` format the wizard uses. 32 raw bytes → 43-char
+ * base64url payload (~256 bits of entropy).
+ */
+export function generateSlotToken(): string {
+  return `c17_${randomBytes(32).toString('base64url')}`;
+}
+
+/**
+ * Rotate the bearer token for `callsign`. Generates a fresh
+ * cryptorandom plaintext token, hashes it, atomically rewrites the
+ * config file, and returns the NEW PLAINTEXT so the caller can show
+ * it to the operator once. The plaintext is never persisted; only
+ * its hash lands on disk.
+ *
+ * Safety posture:
+ *   - Atomic: temp-file + rename inside the config directory.
+ *   - 0o600 on the result (same as writeSquadronConfig).
+ *   - Defensive reload + re-parse of the file, so a concurrent hand
+ *     edit elsewhere in the same file doesn't get trampled.
+ *   - Preserves every other slot's `totpSecret` / `totpLastCounter` /
+ *     `authority` / `role` untouched.
+ */
+export function rotateSlotToken(path: string, callsign: string): string {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw new ConfigNotFoundError(path);
+    throw new SlotLoadError(`failed to read config file at ${path}: ${(err as Error).message}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new SlotLoadError(`config file at ${path} is not valid JSON: ${(err as Error).message}`);
+  }
+  const result = SquadronConfigSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new SlotLoadError(`config file at ${path} is invalid — cannot rotate`);
+  }
+  const target = result.data.slots.find((s) => s.callsign === callsign);
+  if (!target) {
+    throw new SlotLoadError(`no slot with callsign '${callsign}' in ${path}`);
+  }
+
+  const newToken = generateSlotToken();
+  const newHash = hashToken(newToken);
+
+  const onDisk: SlotOnDisk[] = result.data.slots.map((s) => {
+    if (s.callsign === callsign) {
+      return {
+        callsign: s.callsign,
+        role: s.role,
+        authority: s.authority,
+        tokenHash: newHash,
+        totpSecret: s.totpSecret ?? null,
+        totpLastCounter: s.totpLastCounter ?? 0,
+      };
+    }
+    return {
+      callsign: s.callsign,
+      role: s.role,
+      authority: s.authority,
+      tokenHash: s.tokenHash ?? hashToken(s.token as string),
+      totpSecret: s.totpSecret ?? null,
+      totpLastCounter: s.totpLastCounter ?? 0,
+    };
+  });
+
+  const topComment =
+    typeof result.data._comment === 'string' ? result.data._comment : CONFIG_FILE_COMMENT;
+  writeSquadronConfigFile(
+    path,
+    topComment,
+    result.data.squadron,
+    result.data.roles,
+    onDisk,
+    result.data.https,
+    result.data.webPush,
+  );
+
+  return newToken;
 }
 
 /**
@@ -597,7 +765,13 @@ function writeSquadronConfigFile(
     }
     out.tokenHash = s.tokenHash;
     if (s.totpSecret !== undefined && s.totpSecret !== null) {
-      out.totpSecret = s.totpSecret;
+      // Encrypt at the on-disk boundary when a KEK is active.
+      // `encryptField` is idempotent on enc-v1 values, so passing a
+      // mix of plaintext + already-encrypted values (e.g. during an
+      // enroll that touches one slot in a file with others in
+      // various states) is safe.
+      out.totpSecret =
+        activeKek !== null ? (encryptField(s.totpSecret, activeKek) ?? s.totpSecret) : s.totpSecret;
     }
     if (s.totpLastCounter !== undefined && s.totpLastCounter > 0) {
       out.totpLastCounter = s.totpLastCounter;
@@ -614,7 +788,14 @@ function writeSquadronConfigFile(
     payload.https = https;
   }
   if (webPush) {
-    payload.webPush = webPush;
+    // Encrypt the VAPID private key at the on-disk boundary when a
+    // KEK is active. Public key and subject stay in the clear —
+    // neither is sensitive.
+    const vapidPrivateKeyForDisk =
+      activeKek !== null
+        ? (encryptField(webPush.vapidPrivateKey, activeKek) ?? webPush.vapidPrivateKey)
+        : webPush.vapidPrivateKey;
+    payload.webPush = { ...webPush, vapidPrivateKey: vapidPrivateKeyForDisk };
   }
   const body = `${JSON.stringify(payload, null, 2)}\n`;
   atomicWriteRestricted(path, body);
