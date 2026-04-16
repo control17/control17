@@ -32,6 +32,7 @@ import { QuickstartError, runQuickstartCommand } from './commands/quickstart.js'
 import { runRosterCommand } from './commands/roster.js';
 import { runServeCommand } from './commands/serve.js';
 import { runSetupCommand } from './commands/setup.js';
+import { runTelemetryCommand, type TelemetryEventKind } from './commands/telemetry.js';
 import { CLI_VERSION } from './version.js';
 
 const USAGE = `control17 cli v${CLI_VERSION}
@@ -40,6 +41,7 @@ usage:
   c17 setup       [--config-path <path>]            first-run wizard (squadron + slots + TOTP)
   c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
   c17 quickstart  [--skip-browser] [--assignee <callsign>]   seed a demo objective + open the web UI
+  c17 telemetry   enable|disable|preview|rotate|status       opt-in, zero-PII, off-by-default install telemetry
   c17 claude-code [--no-trace] [--doctor] [--skip-doctor] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
   c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
   c17 roster                        list slots, authority, and connection state
@@ -104,6 +106,9 @@ async function main(): Promise<void> {
       return;
     case 'quickstart':
       await handleQuickstart(rest);
+      return;
+    case 'telemetry':
+      await handleTelemetry(rest);
       return;
     case 'push':
       await handlePush(rest);
@@ -216,6 +221,51 @@ async function handlePush(args: string[]): Promise<void> {
     const client = makeClient(values);
     const output = await runPushCommand(input, client);
     log(output);
+  } catch (err) {
+    if (err instanceof UsageError) fail(err.message, 2);
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleTelemetry(args: string[]): Promise<void> {
+  // Sub-subcommand is the first positional. Everything else is an
+  // optional flag (currently just --event for preview and --path for
+  // the state-file override).
+  const action = args[0];
+  if (action === undefined || action === '-h' || action === '--help') {
+    process.stdout.write(USAGE);
+    return;
+  }
+
+  const { values } = parseSubcommandArgs(args.slice(1), {
+    event: { type: 'string' },
+    path: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+
+  const eventRaw = getString(values, 'event');
+  let event: TelemetryEventKind | undefined;
+  if (eventRaw !== undefined) {
+    if (eventRaw !== 'boot' && eventRaw !== 'mission-complete') {
+      fail(`invalid --event value: ${eventRaw} (valid: boot | mission-complete)`, 2);
+    }
+    event = eventRaw;
+  }
+
+  try {
+    await runTelemetryCommand(
+      {
+        action,
+        statePath: getString(values, 'path'),
+        event,
+        control17Version: CLI_VERSION,
+      },
+      (line) => log(line),
+    );
   } catch (err) {
     if (err instanceof UsageError) fail(err.message, 2);
     fail(err instanceof Error ? err.message : String(err));
