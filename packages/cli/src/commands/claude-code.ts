@@ -34,6 +34,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 import {
   ClaudeCodeAdapterError,
@@ -149,6 +151,22 @@ export async function runClaudeCodeCommand(input: ClaudeCodeCommandInput): Promi
   const detectedBridgeCommand = input.bridgeCommand ?? process.execPath;
   const detectedBridgeArgs =
     input.bridgeArgs ?? (process.argv[1] ? [process.argv[1], 'mcp-bridge'] : ['mcp-bridge']);
+
+  // Human-readable CWD / .mcp.json disclosure on stderr. Dan's
+  // 2026-04-16 audit Part-3 DX item #3: the runner rewrites `.mcp.json`
+  // in the current working directory, and operators running from the
+  // wrong directory don't notice until they see their MCP servers
+  // "disappear" mid-session. Printing the absolute path up-front (and
+  // flagging whether we're merging into an existing file or creating a
+  // fresh one) makes the surface legible on turn 1.
+  const mcpTargetPath = resolve(cwd, '.mcp.json');
+  const mcpExistedPriorToRun = existsSync(mcpTargetPath);
+  process.stderr.write(
+    `c17: runner cwd = ${cwd}\n` +
+      `c17: .mcp.json = ${mcpTargetPath}${
+        mcpExistedPriorToRun ? ' (found — backing up and merging c17 entry)' : ' (creating)'
+      }\n`,
+  );
 
   try {
     mcpHandle = prepareMcpConfig({
