@@ -31,6 +31,7 @@ import type {
 import { signal } from '@preact/signals';
 import type { JSX } from 'preact';
 import { useEffect } from 'preact/hooks';
+import { highlightXmlTags } from '../lib/channel-highlight.js';
 import { getClient } from '../lib/client.js';
 
 const exchanges = signal<AgentActivityLlmExchange[]>([]);
@@ -195,6 +196,15 @@ function MessageBlock({
 
 function ContentBlock({ block }: { block: AnthropicContentBlock }): JSX.Element {
   if (block.type === 'text') {
+    const highlighted = highlightXmlTags(block.text);
+    if (highlighted !== null) {
+      return (
+        <pre
+          class="text-xs text-brand-text whitespace-pre-wrap font-mono"
+          dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
+      );
+    }
     return <pre class="text-xs text-brand-text whitespace-pre-wrap font-mono">{block.text}</pre>;
   }
   if (block.type === 'tool_use') {

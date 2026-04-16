@@ -53,7 +53,7 @@ export function Header() {
           viewBox="95 70 335 210"
           class="h-6 w-auto text-brand-primary flex-shrink-0"
           fill="currentColor"
-          aria-label="control17"
+          aria-label="Control17"
           role="img"
         >
           <path d={LOGO_PATH} />

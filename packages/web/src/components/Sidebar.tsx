@@ -240,7 +240,7 @@ export function Sidebar({ viewer }: SidebarProps) {
             onClick={() => {
               void logout();
             }}
-            class="w-full text-left px-3 py-1.5 text-sm text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 border-l-4 border-transparent flex items-center gap-2"
+            class="w-full px-3 py-1.5 text-sm text-brand-muted hover:text-brand-text hover:bg-brand-bg/40 flex items-center justify-center gap-2"
             aria-label="Sign out"
           >
             <svg

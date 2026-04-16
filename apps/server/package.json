@@ -40,7 +40,8 @@
     "c17-server": "./dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "public"
   ],
   "scripts": {
     "build": "tsup",

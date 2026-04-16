@@ -14,14 +14,14 @@ export function Boot() {
         viewBox="95 70 335 210"
         class="h-10 w-auto text-brand-primary opacity-80"
         fill="currentColor"
-        aria-label="control17"
+        aria-label="Control17"
         role="img"
       >
         <path d={LOGO_PATH} />
       </svg>
       <div class="c17-label text-brand-subtle">
         <span class="c17-pulse text-brand-primary inline-block mr-2" />
-        Control17 · Standing up
+        Control17 · standing up
       </div>
     </main>
   );

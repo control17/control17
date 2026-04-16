@@ -2,7 +2,7 @@
   "name": "control17",
   "version": "0.3.1",
   "private": true,
-  "description": "MCP-based agent control plane. OSS monorepo.",
+  "description": "Command & control plane for AI agent operations. OSS monorepo.",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {

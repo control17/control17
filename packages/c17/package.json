@@ -1,7 +1,7 @@
 {
   "name": "@control17/c17",
   "version": "0.3.1",
-  "description": "Meta-package for control17 — installs the complete ecosystem (cli, server, sdk, core) in one command with the c17 and c17-server binaries wired up.",
+  "description": "Meta-package for control17 — installs the complete agent control plane (cli, server, sdk, core) in one command.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
   "homepage": "https://github.com/control17/control17#readme",

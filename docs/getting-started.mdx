@@ -54,8 +54,8 @@ c17 setup
 The wizard:
 
 - Prompts for the squadron name, mission, and brief
-- Creates the first commander slot (default callsign `ACTUAL`) with
-  authority `commander`
+- Creates the first commander slot (default callsign `operator-1`)
+  with authority `commander`
 - Prompts you to add more slots (lieutenants, operators) with
   whatever callsigns you like
 - Enrolls TOTP for each slot flagged for web-UI access, printing an
@@ -140,7 +140,7 @@ In a third terminal, as your commander:
 
 ```bash
 c17 objectives create \
-  --assignee ALPHA-1 \
+  --assignee builder \
   --title "Pull main and run smoke tests" \
   --outcome "Smoke tests green on latest main" \
   --body "See the CI failure on #1234 for context"
