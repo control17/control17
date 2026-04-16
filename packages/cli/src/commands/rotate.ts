@@ -48,6 +48,18 @@ export async function runRotateCommand(
   const server = await loadServerModule();
   const configPath = input.configPath ?? process.env[ENV.configPath] ?? server.defaultConfigPath();
 
+  // Install the KEK before loading — the config on disk may have
+  // encrypted TOTP secrets / VAPID private key that must round-trip
+  // cleanly through load+write even on this rotation-only call path.
+  try {
+    server.setKek(server.resolveKek(configPath));
+  } catch (err) {
+    if (err instanceof server.KekResolutionError) {
+      throw new UsageError(`rotate: ${err.message}`);
+    }
+    throw err;
+  }
+
   // Defensive load — we want to fail fast with a useful error if the
   // config is missing or invalid rather than let `rotateSlotToken`
   // surface the SlotLoadError raw.

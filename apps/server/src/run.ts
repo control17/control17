@@ -76,12 +76,19 @@ export {
   type LoadedSlot,
   loadSquadronConfigFromFile,
   rotateSlotToken,
+  setKek,
   SlotLoadError,
   type SlotStore,
   type SquadronConfig,
   teammatesFromStore,
   writeSquadronConfig,
 } from './slots.js';
+export {
+  EncryptedFieldError,
+  ENCRYPTED_FIELD_PREFIX,
+  KekResolutionError,
+  resolveKek,
+} from './kek.js';
 export {
   currentCode as currentTotpCode,
   generateSecret as generateTotpSecret,

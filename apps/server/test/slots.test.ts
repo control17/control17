@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Role, Squadron } from '@control17/sdk/types';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ENCRYPTED_FIELD_PREFIX, testKek } from '../src/kek.js';
 import {
   ConfigNotFoundError,
   createSlotStore,
@@ -11,6 +12,7 @@ import {
   hashToken,
   loadSquadronConfigFromFile,
   rotateSlotToken,
+  setKek,
   SlotLoadError,
   TOKEN_HASH_PREFIX,
   writeSquadronConfig,
@@ -24,6 +26,9 @@ afterEach(() => {
   for (const dir of dirsToClean.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+  // Reset process-wide KEK so tests don't leak encryption state to
+  // unrelated assertions.
+  setKek(null);
 });
 
 function tmpDir(): string {
@@ -170,6 +175,107 @@ describe('rotateSlotToken', () => {
     expect(() => rotateSlotToken(join(tmpDir(), 'does-not-exist.json'), 'ACTUAL')).toThrow(
       ConfigNotFoundError,
     );
+  });
+});
+
+// ── at-rest encryption of TOTP + VAPID ───────────────────────────────
+
+describe('at-rest encryption round-trip', () => {
+  it('encrypts totpSecret on write and decrypts on load when KEK is active', () => {
+    const dir = tmpDir();
+    const path = join(dir, 'control17.json');
+    const kek = testKek();
+
+    setKek(kek);
+    writeSquadronConfig(path, SAMPLE_SQUADRON, SAMPLE_ROLES, [
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'tok-a' },
+      {
+        callsign: 'ALPHA-1',
+        role: 'implementer',
+        token: 'tok-b',
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+        totpLastCounter: 99,
+      },
+    ]);
+
+    // On disk, the totpSecret is ciphertext.
+    const rawDisk = JSON.parse(readFileSync(path, 'utf8')) as {
+      slots: Array<{ callsign: string; totpSecret?: string }>;
+    };
+    const alphaOnDisk = rawDisk.slots.find((s) => s.callsign === 'ALPHA-1');
+    expect(alphaOnDisk?.totpSecret?.startsWith(ENCRYPTED_FIELD_PREFIX)).toBe(true);
+    expect(alphaOnDisk?.totpSecret).not.toBe('JBSWY3DPEHPK3PXP');
+
+    // In memory, the loaded slot has plaintext again.
+    const config = loadSquadronConfigFromFile(path);
+    const loaded = config.store.resolveByCallsign('ALPHA-1');
+    expect(loaded?.totpSecret).toBe('JBSWY3DPEHPK3PXP');
+    expect(loaded?.totpLastCounter).toBe(99);
+  });
+
+  it('migrates plaintext totpSecret on load under an active KEK', () => {
+    const dir = tmpDir();
+    const path = join(dir, 'control17.json');
+    const kek = testKek();
+
+    // Seed a config WITHOUT a KEK active — totpSecret lands as plaintext.
+    setKek(null);
+    writeSquadronConfig(path, SAMPLE_SQUADRON, SAMPLE_ROLES, [
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'tok-a' },
+      {
+        callsign: 'ALPHA-1',
+        role: 'implementer',
+        token: 'tok-b',
+        totpSecret: 'PLAINTEXTTOTPSECRET',
+        totpLastCounter: 5,
+      },
+    ]);
+    const rawBefore = JSON.parse(readFileSync(path, 'utf8')) as {
+      slots: Array<{ callsign: string; totpSecret?: string }>;
+    };
+    expect(rawBefore.slots.find((s) => s.callsign === 'ALPHA-1')?.totpSecret).toBe(
+      'PLAINTEXTTOTPSECRET',
+    );
+
+    // Now activate the KEK and load — the loader migrates in place.
+    setKek(kek);
+    const config = loadSquadronConfigFromFile(path);
+    expect(config.migrated).toBeGreaterThan(0);
+
+    const rawAfter = JSON.parse(readFileSync(path, 'utf8')) as {
+      slots: Array<{ callsign: string; totpSecret?: string }>;
+    };
+    const alphaAfter = rawAfter.slots.find((s) => s.callsign === 'ALPHA-1');
+    expect(alphaAfter?.totpSecret?.startsWith(ENCRYPTED_FIELD_PREFIX)).toBe(true);
+
+    // In-memory loaded slot still holds plaintext.
+    expect(config.store.resolveByCallsign('ALPHA-1')?.totpSecret).toBe('PLAINTEXTTOTPSECRET');
+  });
+
+  it('rotateSlotToken round-trips correctly under an active KEK', () => {
+    const dir = tmpDir();
+    const path = join(dir, 'control17.json');
+    setKek(testKek());
+
+    writeSquadronConfig(path, SAMPLE_SQUADRON, SAMPLE_ROLES, [
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'tok-a' },
+      {
+        callsign: 'ALPHA-1',
+        role: 'implementer',
+        token: 'tok-b',
+        totpSecret: 'PRESERVE-ME',
+        totpLastCounter: 77,
+      },
+    ]);
+
+    const newTok = rotateSlotToken(path, 'ALPHA-1');
+    const config = loadSquadronConfigFromFile(path);
+    const loaded = config.store.resolve(newTok);
+    expect(loaded?.callsign).toBe('ALPHA-1');
+    // TOTP secret round-trip survives a rotation of an UNRELATED
+    // credential (the bearer).
+    expect(loaded?.totpSecret).toBe('PRESERVE-ME');
+    expect(loaded?.totpLastCounter).toBe(77);
   });
 });
 

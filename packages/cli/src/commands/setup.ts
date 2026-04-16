@@ -34,6 +34,19 @@ export async function runSetupCommand(
   const server = await loadServerModule();
   const configPath = input.configPath ?? process.env[ENV.configPath] ?? server.defaultConfigPath();
 
+  // Install the KEK before any load / write. `resolveKek` will
+  // auto-generate a fresh key file alongside the (future) config if
+  // one isn't already present, so the wizard's first write encrypts
+  // TOTP secrets + VAPID private key on disk from day one.
+  try {
+    server.setKek(server.resolveKek(configPath));
+  } catch (err) {
+    if (err instanceof server.KekResolutionError) {
+      throw new UsageError(`setup: ${err.message}`);
+    }
+    throw err;
+  }
+
   // Refuse to touch an existing config. Parse it so the user gets a
   // diagnostic showing what's already there — that's usually enough
   // to realize they didn't actually want to re-run setup.

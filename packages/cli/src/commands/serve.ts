@@ -71,10 +71,25 @@ async function loadOrCreateSquadronConfig(
   configPath: string,
   stdout: (line: string) => void,
 ): Promise<SquadronConfig> {
+  // Resolve + install the KEK before loading. Auto-generates a key file
+  // alongside the config on first boot; subsequent boots read the same
+  // key. Operators who manage their own key injection set C17_KEK
+  // instead and this call returns the env-var-resolved buffer.
+  try {
+    server.setKek(server.resolveKek(configPath));
+  } catch (err) {
+    if (err instanceof server.KekResolutionError) {
+      throw new UsageError(`serve: ${err.message}`);
+    }
+    throw err;
+  }
   try {
     const config = server.loadSquadronConfigFromFile(configPath);
     if (config.migrated > 0) {
-      stdout(`c17 serve: hashed ${config.migrated} plaintext token(s) in ${configPath}`);
+      stdout(
+        `c17 serve: migrated ${config.migrated} plaintext field(s) in ${configPath} ` +
+          '(token hashes, TOTP secrets, and/or VAPID private key)',
+      );
     }
     return config;
   } catch (err) {
