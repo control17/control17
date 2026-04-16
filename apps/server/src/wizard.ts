@@ -245,11 +245,8 @@ export async function runFirstRunWizard(options: RunWizardOptions): Promise<Squa
 }
 
 async function promptSquadron(io: WizardIO): Promise<Squadron> {
-  const name = await promptRequired(
-    io,
-    'squadron name [my-team]: ',
-    'my-team',
-    (v) => (v.length > 0 && v.length <= 128 ? null : 'must be 1-128 characters'),
+  const name = await promptRequired(io, 'squadron name [my-team]: ', 'my-team', (v) =>
+    v.length > 0 && v.length <= 128 ? null : 'must be 1-128 characters',
   );
   const mission = await promptRequired(
     io,
