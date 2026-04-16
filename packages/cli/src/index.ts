@@ -38,7 +38,7 @@ const USAGE = `control17 cli v${CLI_VERSION}
 usage:
   c17 setup       [--config-path <path>]            first-run wizard (squadron + slots + TOTP)
   c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
-  c17 claude-code [--no-trace] [--doctor] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
+  c17 claude-code [--no-trace] [--doctor] [--skip-doctor] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
   c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
   c17 roster                        list slots, authority, and connection state
   c17 objectives  list|view|create|update|complete|cancel|reassign   squadron objectives
@@ -338,6 +338,7 @@ async function handleClaudeCode(args: string[]): Promise<void> {
   let token: string | undefined;
   let noTrace = false;
   let doctor = false;
+  let skipDoctor = false;
   const claudeArgs: string[] = [];
   let seenDashDash = false;
 
@@ -364,6 +365,10 @@ async function handleClaudeCode(args: string[]): Promise<void> {
       doctor = true;
       continue;
     }
+    if (arg === '--skip-doctor') {
+      skipDoctor = true;
+      continue;
+    }
     if (arg === '--url' || arg === '--token') {
       const next = args[i + 1];
       if (next === undefined) {
@@ -379,10 +384,30 @@ async function handleClaudeCode(args: string[]): Promise<void> {
     claudeArgs.push(arg);
   }
 
+  // Explicit `--doctor` is the "run doctor, print the full report, exit"
+  // mode. Unchanged.
   if (doctor) {
     const report = await runDoctor();
     log(formatReport(report));
     process.exit(report.anyFail ? 1 : 0);
+  }
+
+  // Default preflight: run doctor silently before spawning claude so a
+  // broken environment surfaces as a readable report instead of a
+  // cryptic runtime error three seconds into the session. `--skip-doctor`
+  // opts out for operators who know the environment is fine (CI,
+  // scripted reruns, etc.). WARNs are advisory — we proceed. Only FAILs
+  // abort, and when they do we dump the full report so the operator can
+  // see which check tripped.
+  if (!skipDoctor) {
+    const report = await runDoctor();
+    if (report.anyFail) {
+      process.stderr.write(formatReport(report));
+      process.stderr.write(
+        `\nc17 claude-code: preflight FAILED — fix the above or pass --skip-doctor to bypass\n`,
+      );
+      process.exit(1);
+    }
   }
 
   try {
