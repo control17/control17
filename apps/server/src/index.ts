@@ -160,7 +160,7 @@ async function main(): Promise<void> {
   }
 
   const host = readEnv(ENV.host) ?? '127.0.0.1';
-  const dbPath = readEnv(ENV.dbPath) ?? ':memory:';
+  const dbPath = readEnv(ENV.dbPath) ?? './c17.db';
   const configPath = args.configPath ?? defaultConfigPath();
 
   const {

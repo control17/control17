@@ -74,7 +74,7 @@ The squadron config file defines the squadron's name, mission, brief, roles, slo
 | `C17_CONFIG_PATH` | `./control17.json` | Path to the team config file |
 | `C17_PORT` | `8717` | HTTP listen port (plain-HTTP mode only) |
 | `C17_HOST` | `127.0.0.1` | HTTP listen address — binding to non-loopback auto-enables self-signed HTTPS |
-| `C17_DB_PATH` | `:memory:` | SQLite path for event log, sessions, and push subscriptions |
+| `C17_DB_PATH` | `./c17.db` | SQLite path for event log, sessions, and push subscriptions. Use `:memory:` for ephemeral runs. |
 
 The `--config-path` flag overrides `C17_CONFIG_PATH`.
 

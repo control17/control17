@@ -1,215 +1,190 @@
 # control17
 
-**MCP-based agent squadron control plane.** Define a squadron, give
-every slot a callsign + role + authority level, push-assign objectives
-to agents, and watch the LLM traces flow back to the operator in
-real time.
+**Command & control plane for AI agent operations.** Deploy AI agents
+as always-on infrastructure — assign work, watch them execute, review
+every LLM call, and know what each task cost.
 
-## What it is
+The best AI agents already exist. control17 lets you operate them like
+a team.
 
-control17 is a command-and-control plane for AI agent teams. It gives
-you three things working together:
+## What you get
 
-1. **Identity + chat** — slots with callsigns, DMs, broadcasts, a team
-   channel. Events arrive at agents as MCP `notifications/claude/channel`
-   with no polling and no user prompt.
-2. **Push-assigned objectives** — a structured work primitive with a
-   four-state lifecycle (`active → blocked → done | cancelled`), a
-   required outcome, threaded discussion, and tool descriptions that
-   refresh on every state change.
-3. **First-class LLM trace capture** — `c17 claude-code` spawns the
-   agent behind a loopback MITM TLS proxy with a per-session local
-   CA. Every HTTPS flow the agent makes is decrypted transparently
-   (transparent to the upstream — we're a real TLS client on that
-   leg), parsed as HTTP/1.1, extracted into the Anthropic API shape
-   (model, messages, tool_use, tool_result, usage), redacted for
-   secrets, and streamed to the server for commander review. No
-   tshark, no pcap, no SSLKEYLOGFILE — just Node's built-in
-   `tls` + `crypto` modules.
+1. **Agents as autonomous workforce.** Claude Code stops being a tool
+   you sit in front of and becomes a slot that takes on work — long-lived,
+   always on, no human at the keyboard. The runner (`c17 claude-code`)
+   wraps the agent, connects it to the team, and forwards objectives
+   and events without polling.
 
-The authority model is a three-tier hierarchy: **commander** (full
-squadron power), **lieutenant** (can create/cancel objectives they
-originated), **operator** (executes assigned work). Every endpoint
-enforces this server-side.
+2. **Full visibility into closed-box agents.** Every LLM exchange is
+   captured through a transparent MITM TLS proxy, structured into the
+   Anthropic API shape (model, messages, tool_use, usage), redacted
+   for secrets, and streamed to the server. Commanders review traces
+   scoped to the objective the agent was working on.
 
-## Process model
+3. **Push-assigned objectives with contractual outcomes.** Objectives
+   carry a required `outcome` field that rides in the agent's tool
+   descriptions and refreshes mid-session. The agent never loses sight
+   of "done." Four-state lifecycle (`active → blocked → done | cancelled`),
+   threaded discussion, full audit log.
+
+4. **Real-time team comms.** Slots with callsigns, DMs, broadcasts,
+   a team channel. Events arrive at agents as notifications — no
+   polling, no user prompt. Humans use the same channel through the
+   web UI.
+
+5. **A self-hosted server you control.** One process, SQLite on disk,
+   built-in web UI. No external dependencies, no cloud accounts, no
+   data leaving your machine. `c17 serve` and you're running.
+
+## Web UI
+
+The server ships a built-in Preact PWA at `/` — commander dashboard,
+objective management with live discussion threads + lifecycle log +
+captured LLM traces (commander-only), roster with connection state,
+team channel, DM threads, Web Push notifications.
+
+- **Login**: 6-digit TOTP, no passwords
+- **Session**: `HttpOnly` / `SameSite=Strict` / `Secure`. 7-day sliding TTL
+- **Push**: DMs always notify; broadcasts on `level >= warning` or `@mention`
+- **PWA**: installable, offline shell cache, works on Chromium / Firefox / Safari
+
+## Quick start
+
+```bash
+npm install -g @control17/cli @control17/server
+
+# First run triggers the setup wizard —
+# creates your team, slots, authority tiers, and TOTP enrollment.
+c17 serve
+
+# Open the web UI
+open http://127.0.0.1:8717
+
+# In another terminal — wrap a claude session with the runner.
+export C17_TOKEN=c17_your_slot_token
+c17 claude-code
+```
+
+Preflight-check the environment before your first run:
+
+```bash
+c17 claude-code --doctor
+```
+
+## Authority model
+
+Three tiers, enforced server-side on every endpoint:
+
+| Tier | Can do |
+|---|---|
+| **Commander** | Everything — create/reassign/cancel objectives, view traces, manage the team |
+| **Lieutenant** | Create objectives they originate, cancel their own, participate in comms |
+| **Operator** | Execute assigned objectives, participate in comms |
+
+## How it works
 
 ```
            operator terminal
                   │
                   ▼
        ┌─────────────────────┐
-       │   c17 claude-code   │  ◀── the RUNNER: owns broker client,
-       │   (long-lived)      │      SSE subscription, objectives,
-       │                     │      trace host (MITM proxy + local CA)
+       │   c17 claude-code   │  ◀── the RUNNER: broker client, SSE,
+       │   (long-lived)      │      objectives, trace host (MITM
+       │                     │      proxy + per-session local CA)
        └──────────┬──────────┘
                   │ spawns with HTTPS_PROXY / NODE_EXTRA_CA_CERTS
-                  │
                   ▼
        ┌─────────────────────┐
        │     claude (CLI)    │  ◀── the AGENT: does the work
        │                     │      spawns c17 mcp-bridge via .mcp.json
        └──────────┬──────────┘
                   │ stdio MCP
-                  │
                   ▼
        ┌─────────────────────┐
-       │   c17 mcp-bridge    │  ◀── THIN stdio relay, ~230 lines.
-       │                     │      Forwards MCP traffic over a
-       └──────────┬──────────┘      Unix socket to the runner.
-                  │ IPC (JSON over UDS)
+       │   c17 mcp-bridge    │  ◀── thin stdio relay → runner over UDS
+       └──────────┬──────────┘
+                  │ IPC
                   ▼
           back to the runner
                   │
-                  ▼ HTTP + SSE (bearer)
+                  ▼ HTTP + SSE
               c17 broker
 ```
 
-- **Runner** (`c17 claude-code`) is the operator's entry point. It
-  fetches `/briefing`, binds an IPC socket, starts the SSE forwarder,
-  starts the trace host, backs up `.mcp.json`, spawns claude, and
-  cleans up on every exit path.
-- **Bridge** (`c17 mcp-bridge`, hidden verb) is the stdio MCP server
-  claude spawns via the `.mcp.json` entry the runner wrote. Stateless
-  — just shuttles JSON-RPC frames between stdio and the runner's
-  Unix socket.
-- **Broker** (`@control17/server`) is authoritative about the
-  squadron: mission, roles, slots + authority, objectives, traces.
-  Uses `@control17/core` under Hono + `node:sqlite` + SSE.
+The **runner** is the operator's entry point — it fetches the team
+briefing, starts the trace host, wires the MCP bridge, spawns the
+agent, forwards events, and cleans up on every exit path.
 
-## Two auth planes, one identity
+The **broker** (`c17 serve`) is authoritative about the team:
+mission, roles, slots, authority, objectives, activity streams.
+Hono + `node:sqlite` + SSE.
 
-The broker serves humans (browser, TOTP + session cookie) and agents
-(runners, bearer token) over the same authorization layer. Both
-resolve to the same slot, so "commander ACTUAL posted to obj-X" and
-"obj-X received a discussion message from ACTUAL" are the same fact.
+Both humans (TOTP + session cookie) and agents (bearer token) resolve
+to the same slot identity through the same auth layer, so everything
+a slot does — human or machine — shows up under one callsign.
 
-- **Machine plane** — `Authorization: Bearer c17_…`. Tokens live in
-  the squadron config file (SHA-256 hashed on disk) and authenticate
-  the operator's `c17 claude-code` runner.
-- **Human plane** — `c17_session` cookie, minted after a TOTP login.
-  VAPID web-push keys live in the same config file. A single slot
-  can be used as either plane or both; the authority level applies
-  to everything the slot does on both planes.
+## Deployment
 
-## Web UI
-
-The broker serves a built-in Preact + Vite SPA at `/` — commander
-dashboard, objective detail with live discussion thread + lifecycle
-log + **captured LLM traces** (commander-only), roster, team channel,
-DM threads, Web Push support. PWA-installable on Chromium / Firefox
-/ Safari.
-
-- **Login**: 6-digit TOTP, no passwords, no reset flows. Enroll at
-  setup time or via `c17 enroll --slot <callsign>`.
-- **Session**: `HttpOnly` / `SameSite=Strict` / `Secure` (when HTTPS).
-  7-day sliding TTL.
-- **HTTP/2**: the HTTPS listener speaks HTTP/2 with HTTP/1.1 ALPN
-  fallback so SSE doesn't hit the browser 6-connection cap.
-- **Push notifications**: DMs always notify (unless the tab is live);
-  broadcasts notify on `level >= warning` or `@mention`.
-
-## Three deployment tiers
-
-### 1. Localhost dev
+### Localhost
 
 ```bash
-cd apps/server && node --env-file-if-exists=../../.env ./dist/index.js
+c17 serve
 # → http://127.0.0.1:8717
 ```
 
-Plain HTTP, localhost bind. `127.0.0.1` counts as a secure context,
-so PWA install + Web Push both work without a cert.
+Plain HTTP, localhost bind. `127.0.0.1` is a secure context — PWA
+install + Web Push both work without a cert.
 
-### 2. LAN / self-hosted
+### LAN / self-hosted
 
 ```bash
-C17_HOST=0.0.0.0 node ./dist/index.js
+C17_HOST=0.0.0.0 c17 serve
 # → https://<lan-ip>:7443  (auto-generated self-signed cert)
 ```
 
-Binding to a non-loopback interface auto-flips the server into
-self-signed HTTPS mode. Certs live under `<configDir>/certs/server.{crt,key}`
-at `0o600` and persist across restarts. Browsers show a one-time
-warning you click through.
+Non-loopback bind auto-enables self-signed HTTPS. Certs persist
+across restarts at `0o600`.
 
-**Safari iOS caveat:** Safari refuses service workers on self-signed
-certs. If you need the PWA on an iPhone, use tier 3.
+### Public
 
-### 3. Public deployment via tunnel
-
-Bring the server up in tier 1 or 2 and front it with:
-
-- **Tailscale Funnel** — `tailscale funnel 8717` gives you a real
-  `*.ts.net` cert with zero config. Recommended for small squadrons.
-- **Cloudflare Tunnel** — `cloudflared tunnel run` routes a custom
-  domain through Cloudflare's edge.
-- **Reverse proxy (nginx / Caddy)** — terminate TLS upstream and
-  proxy to `http://127.0.0.1:8717`.
+Front the server with **Tailscale Funnel** (`tailscale funnel 8717`),
+**Cloudflare Tunnel**, or any reverse proxy (nginx, Caddy) for a
+real TLS cert.
 
 ## Install
 
 ```bash
-# Everything (cli + server + web + sdk + core)
+# Everything in one command
 npm install -g @control17/c17
 
-# Or individual roles
-npm install -g @control17/cli       # operator terminal (includes `c17 claude-code`)
+# Or pick what you need
+npm install -g @control17/cli       # operator terminal (c17 claude-code, c17 push, etc.)
 npm install -g @control17/server    # self-hosted broker (includes the web UI)
 ```
-
-The web UI ships inside `@control17/server` as static assets. After
-the broker boots, navigate to `http://<server>/`.
 
 ## Packages
 
 | Package | Role |
 |---|---|
-| `@control17/c17` | Meta-package — `npm install`s the full ecosystem |
-| `@control17/sdk` | Wire contract + TypeScript client (subpath exports for types-only consumers) |
-| `@control17/core` | Runtime-agnostic broker logic — agent registry, push, SSE, event log |
-| `@control17/server` | Node broker (Hono + node:sqlite) with config loader, wizard, objectives store, trace upload endpoints, and the web UI |
-| `@control17/web` | Preact + Vite + UnoCSS SPA — team chat, roster, objectives, commander-only trace review |
-| `@control17/cli` | Operator CLI: `c17 claude-code`, `c17 objectives`, `c17 push`, `c17 roster`, `c17 serve`, plus the internal `c17 mcp-bridge` |
-
-**Light install:** `@control17/cli` has `@control17/sdk` as its only
-hard dependency. `@control17/server` is an optional peer —
-subcommands dynamically import it and print an install hint if
-missing.
+| `@control17/c17` | Meta-package — installs the full ecosystem |
+| `@control17/sdk` | Wire contract + TypeScript client |
+| `@control17/core` | Runtime-agnostic broker logic — registry, push, SSE, event log |
+| `@control17/server` | Node broker (Hono + SQLite) with wizard, objectives, traces, and built-in web UI |
+| `@control17/web` | Preact SPA — chat, roster, objectives, trace review (ships inside server) |
+| `@control17/cli` | Operator CLI — `c17 claude-code`, `c17 objectives`, `c17 push`, `c17 roster`, `c17 serve` |
 
 ## Requirements
 
 - Node.js 22+
-- pnpm 10+ (for development)
-- (Optional) `claude` on PATH or pointed to via `$CLAUDE_PATH`, if
-  you plan to run `c17 claude-code`.
+- pnpm 10+ (for development only)
+- `claude` on PATH (or `$CLAUDE_PATH`) for `c17 claude-code`
 
-No external tools required for trace capture — the decoder is
-pure Node with zero runtime deps beyond `node-forge` for CA cert
-signing (bundled with the cli).
-
-## Getting started
-
-```bash
-# 1. First-run wizard: squadron + slots + authority + TOTP enrollment.
-#    Writes ./control17.json with 0o600.
-c17 serve          # triggers wizard on first run
-
-# 2. Open the web UI. Log in with your slot callsign + a fresh 6-digit
-#    TOTP code from your authenticator app.
-open http://127.0.0.1:8717
-
-# 3. Wrap a claude session with the runner. Trace capture on by default
-#    — use --no-trace to disable. Use --doctor to preflight-check the
-#    environment (claude binary, $TMPDIR, loopback bind, CA generation).
-export C17_TOKEN=c17_your_slot_token
-c17 claude-code --doctor
-c17 claude-code
-```
+No external tools for trace capture — pure Node with `node-forge`
+for CA cert signing.
 
 ## Development
 
-### Building from source
+### Build from source
 
 ```bash
 git clone https://github.com/control17/control17.git
@@ -223,72 +198,50 @@ pnpm test          # 332 tests across server, cli, and web
 
 ```bash
 # Terminal 1 — watch-mode server + Vite dev proxy
-#   First run triggers the squadron setup wizard.
-#   Server on :8717, Vite on :5173 with API proxy.
-pnpm dev
+pnpm dev           # first run triggers the setup wizard
+                   # server on :8717, Vite on :5173
 
-# Terminal 2 — open the web UI
+# Terminal 2
 open http://127.0.0.1:5173
 ```
 
 ### Running a test agent
 
-The runner writes `.mcp.json` in its process CWD and spawns claude
-with that CWD inherited — **where you invoke it matters**. A shell
-alias pointing at the built cli is the easiest way to iterate:
+The runner writes `.mcp.json` in CWD and spawns claude there —
+**where you invoke it matters.** Use an alias for the built CLI:
 
 ```bash
-# Add to ~/.bashrc or ~/.zshrc (adjust the path for your checkout):
+# ~/.bashrc or ~/.zshrc
 alias c17-dev='node ~/path/to/control17/packages/cli/dist/index.js'
 ```
 
 Then from any scratch directory:
 
 ```bash
-mkdir -p ~/scratch/test-alpha && cd ~/scratch/test-alpha
+mkdir -p ~/scratch/test && cd ~/scratch/test
 export C17_TOKEN=c17_your_slot_token
-c17-dev claude-code --doctor    # preflight check
-c17-dev claude-code             # wrap a claude session
+c17-dev claude-code --doctor
+c17-dev claude-code
 ```
 
-`c17 claude-code` auto-injects two flags into the claude invocation:
-
-- `--dangerously-skip-permissions` — c17's tools live behind the
-  squadron authority model, not per-call permission prompts.
-- `--dangerously-load-development-channels server:c17` — enables
-  claude's `claude/channel` experimental capability against the
-  bridge.
-
-Both are de-duped if you also pass them explicitly. Additional claude
-flags go after `--`:
+`c17 claude-code` auto-injects `--dangerously-skip-permissions` and
+`--dangerously-load-development-channels server:c17` into the claude
+invocation. Forward additional flags after `--`:
 
 ```bash
 c17-dev claude-code -- --model opus --continue
 ```
 
-### CLAUDE.md guard for test workspaces
-
-Claude Code walks up the directory tree reading every `CLAUDE.md` it
-finds. If your test workspace is inside the control17 repo, a blank
-`CLAUDE.md` in the parent of the workspace directory prevents the
-repo root's instructions from leaking into the test session.
-
-### Cleaning up
-
-The runner restores `.mcp.json` on every exit path (normal, signal,
-crash). If something crashes mid-run, look for runtime artifacts
-under `/tmp/c17-runner-*` and `/tmp/c17-trace-ca-*`.
-
 ## Docs
 
-- [architecture.md](./docs/architecture.md) — full walkthrough of the
-  runner/bridge split, IPC protocol, MITM proxy, and identity model
+- [architecture.md](./docs/architecture.md) — runner/bridge split,
+  IPC protocol, MITM proxy, identity model
 - [getting-started.mdx](./docs/getting-started.mdx) — step-by-step
   first-run guide
-- [concepts/objectives.mdx](./docs/concepts/objectives.mdx) — how
-  push-assigned work flows end-to-end
-- [tracing.mdx](./docs/tracing.mdx) — trace capture setup, decode
-  pipeline, security posture, and what's redacted
+- [concepts/objectives.mdx](./docs/concepts/objectives.mdx) —
+  push-assigned work, end to end
+- [tracing.mdx](./docs/tracing.mdx) — trace capture, decode
+  pipeline, security posture
 
 ## License
 
