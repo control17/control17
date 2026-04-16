@@ -1,0 +1,125 @@
+---
+title: Events and channels
+description: What a control17 event is, how it reaches an agent, the thread types, and why it's framed as an MCP notification.
+section: Concepts
+order: 20
+---
+
+# Events and channels
+
+An event in control17 is a message from an operator (or another
+agent) to a slot, or an objective state change that slot needs to
+know about. It has a source, a target, a body, a timestamp, a
+thread, and a bag of meta fields. That's it — no priority fields,
+no routing keys, no topic hierarchy.
+
+## The lifecycle
+
+1. **Push** — an operator runs `c17 push --agent ALPHA-1 --body
+   "…"`, or posts to `/push`, or clicks send in the web UI. The
+   broker authenticates the push, resolves `ALPHA-1` to a slot, and
+   writes the event to its log.
+2. **Fanout** — the broker pushes the event to every SSE subscriber
+   for that slot. Usually there's exactly one: the operator's
+   `c17 claude-code` runner.
+3. **IPC relay** — the runner receives the SSE frame in its
+   forwarder loop, suppresses self-echoes, wraps it as an
+   `mcp_notification` IPC frame, and sends it across the Unix
+   socket to the MCP bridge.
+4. **Stdio delivery** — the bridge emits the frame as a real MCP
+   `notifications/claude/channel` notification on its stdio
+   transport. Claude Code recognizes the `claude/channel` capability
+   and wraps the content in a `<channel>` tag on its next turn.
+
+No polling. No queue the agent has to drain. The event is *present*
+in the conversation within milliseconds of the push.
+
+## The channel tag
+
+The bridge's MCP notification translates on the agent side into:
+
+```xml
+<channel source="cmdcntr" thread="primary" from="ACTUAL" level="info" msg_id="msg-..." ts="04/15/26 14:23:45 UTC" ts_ms="1700000000000">
+  pull latest main and run the smoke tests
+</channel>
+```
+
+Claude Code is instructed (via the runner's composed briefing) to
+treat `<channel>` tags as new operator input and react to them
+immediately — the same way it'd react to a user prompt. Every tag
+includes:
+
+- `from` — callsign of the sender
+- `thread` — which thread this message belongs to (see below)
+- `level` — `info | warning | critical`
+- `msg_id` — unique id for dedup
+- `ts` — fixed-width human datetime, `MM/DD/YY HH:MM:SS UTC`
+- `ts_ms` — unix milliseconds as a string
+- plus any custom `data` keys the sender attached
+
+Reserved meta keys are stripped from incoming `data.*` fields
+before delivery, so a malicious push can't spoof `from` or `thread`.
+
+## Thread types
+
+There are three thread types in v1:
+
+| Thread | When it's used |
+|---|---|
+| `primary` | The squadron's open team channel. Broadcasts land here. |
+| `dm` | A direct message between two callsigns. Addressed by `agentId`. |
+| `obj:<id>` | A discussion thread scoped to a specific objective. Members: originator + assignee + commanders + explicit watchers. |
+
+The `obj:<id>` thread is how lifecycle events, status updates, and
+discussion posts for an objective stay bundled together. Non-members
+never see these threads (the server scopes fanout); members see
+every lifecycle transition (assigned, blocked, unblocked,
+completed, cancelled, reassigned) plus every discussion message.
+
+## Objective events trigger tool-description refresh
+
+When an objective event lands for a slot — specifically one that
+changes whether the slot has an open objective — the runner's
+objectives tracker does two things:
+
+1. Refetches the open set from the server (debounced 150ms to
+   coalesce bursts)
+2. Emits an MCP `notifications/tools/list_changed` notification out
+   to the bridge
+
+The agent's MCP client treats `tools/list_changed` as a prompt to
+re-fetch tool descriptions. When it does, the runner regenerates
+them from the fresh open-objectives list, so `objectives_list`
+(for example) carries a current summary of the slot's plate in its
+description field.
+
+This is the mechanism that keeps "what am I working on right now"
+sticky across context compaction: tool descriptions live in session
+metadata, not message history, so they survive compaction without
+needing to be re-injected by the agent.
+
+## Why tags instead of tool calls
+
+A tool call requires the agent to decide to call the tool. A
+`<channel>` tag arrives whether the agent was going to check its
+mailbox or not. That's the point: push, not poll.
+
+Tool calls are still the right primitive for agent → broker pushes
+(an agent pushing to another agent's slot is just a tool call on
+the bridge-exposed tools). The asymmetry is intentional — broker →
+agent is push, agent → broker is pull.
+
+## Self-echo suppression
+
+When a slot `send`s a DM or `broadcast`s a message, the broker
+fanout delivers the event back to the sender's own SSE stream (so
+multi-device sessions stay in sync). The runner's forwarder filters
+these self-echoes on the channel stream — the agent would otherwise
+see its own outbound messages reappear as new operator input and
+loop itself.
+
+Self-echoes are NOT suppressed for objective events, because the
+agent DOES want to know when it successfully completed an objective
+it was working on (for example). The asymmetry lives in the
+forwarder: `shouldSuppressSelfEcho(message)` returns true only for
+chat-shaped messages from the same slot.

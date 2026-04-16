@@ -3,12 +3,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message } from '@control17/sdk/types';
 import { afterEach, describe, expect, it } from 'vitest';
+import { type DatabaseSyncInstance, openDatabase } from '../src/db.js';
 import { SqliteEventLog } from '../src/sqlite-event-log.js';
 
 describe('SqliteEventLog', () => {
   const dirsToClean: string[] = [];
+  const dbsToClose: DatabaseSyncInstance[] = [];
 
   afterEach(() => {
+    for (const db of dbsToClose.splice(0)) {
+      try {
+        db.close();
+      } catch {
+        /* already closed */
+      }
+    }
     for (const dir of dirsToClean.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -20,8 +29,14 @@ describe('SqliteEventLog', () => {
     return join(dir, 'events.db');
   }
 
+  function makeLog(path: string): SqliteEventLog {
+    const db = openDatabase(path);
+    dbsToClose.push(db);
+    return new SqliteEventLog(db);
+  }
+
   it('append + tail round-trip preserves the full message shape', async () => {
-    const log = new SqliteEventLog(tmpDbPath());
+    const log = makeLog(tmpDbPath());
     const m1: Message = {
       id: 'a',
       ts: 1,
@@ -36,11 +51,10 @@ describe('SqliteEventLog', () => {
     const tailed = await log.tail();
     expect(tailed).toHaveLength(1);
     expect(tailed[0]).toEqual(m1);
-    await log.close();
   });
 
   it('round-trips messages with null `from` (e.g., pre-auth migration data)', async () => {
-    const log = new SqliteEventLog(tmpDbPath());
+    const log = makeLog(tmpDbPath());
     const m: Message = {
       id: 'legacy',
       ts: 5,
@@ -54,11 +68,10 @@ describe('SqliteEventLog', () => {
     await log.append(m);
     const tailed = await log.tail();
     expect(tailed[0]?.from).toBeNull();
-    await log.close();
   });
 
   it('tail honours since + limit', async () => {
-    const log = new SqliteEventLog(tmpDbPath());
+    const log = makeLog(tmpDbPath());
     for (let i = 0; i < 5; i++) {
       await log.append({
         id: `m${i}`,
@@ -76,12 +89,12 @@ describe('SqliteEventLog', () => {
 
     const limit = await log.tail({ limit: 2 });
     expect(limit.map((m) => m.id).sort()).toEqual(['m3', 'm4']);
-    await log.close();
   });
 
   it('persists messages across reopening the database', async () => {
     const path = tmpDbPath();
-    const first = new SqliteEventLog(path);
+    const firstDb = openDatabase(path);
+    const first = new SqliteEventLog(firstDb);
     await first.append({
       id: 'persist',
       ts: 10,
@@ -92,13 +105,14 @@ describe('SqliteEventLog', () => {
       level: 'info',
       data: {},
     });
-    await first.close();
+    firstDb.close();
 
-    const second = new SqliteEventLog(path);
+    const secondDb = openDatabase(path);
+    dbsToClose.push(secondDb);
+    const second = new SqliteEventLog(secondDb);
     const tailed = await second.tail();
     expect(tailed).toHaveLength(1);
     expect(tailed[0]?.body).toBe('survive');
     expect(tailed[0]?.from).toBe('alice');
-    await second.close();
   });
 });

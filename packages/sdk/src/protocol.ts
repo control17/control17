@@ -11,23 +11,53 @@ export const AUTH_HEADER = 'Authorization' as const;
 
 export const PATHS = {
   health: '/healthz',
-  agents: '/agents',
-  register: '/register',
+  briefing: '/briefing',
+  roster: '/roster',
   push: '/push',
   subscribe: '/subscribe',
-  whoami: '/whoami',
   history: '/history',
-  mcp: '/mcp',
-  events: '/events',
+  // Human-plane session management (TOTP login + session cookie).
+  sessionTotp: '/session/totp',
+  sessionLogout: '/session/logout',
+  session: '/session',
+  // Web Push (browser) — VAPID public key + per-device subscriptions.
+  pushVapidPublicKey: '/push/vapid-public-key',
+  pushSubscriptions: '/push/subscriptions',
+  // Objectives — Commander/Lieutenant create & assign, assignees execute.
+  objectives: '/objectives',
+  // The helpers below compose `:id` paths at runtime rather than
+  // templating here, since `PATHS` is keyed by identifier not URL.
+} as const;
+
+/** Path builders for objective subresources (the `:id` segment varies). */
+export const OBJECTIVE_PATHS = {
+  one: (id: string) => `/objectives/${encodeURIComponent(id)}`,
+  complete: (id: string) => `/objectives/${encodeURIComponent(id)}/complete`,
+  cancel: (id: string) => `/objectives/${encodeURIComponent(id)}/cancel`,
+  reassign: (id: string) => `/objectives/${encodeURIComponent(id)}/reassign`,
+  discuss: (id: string) => `/objectives/${encodeURIComponent(id)}/discuss`,
+  watchers: (id: string) => `/objectives/${encodeURIComponent(id)}/watchers`,
+} as const;
+
+/**
+ * Path builders for per-agent activity stream endpoints.
+ *
+ *   POST /agents/:callsign/activity            — append (self only)
+ *   GET  /agents/:callsign/activity            — range query (self or commander)
+ *   GET  /agents/:callsign/activity/stream     — SSE live tail (self or commander)
+ */
+export const AGENT_PATHS = {
+  activity: (callsign: string) => `/agents/${encodeURIComponent(callsign)}/activity`,
+  activityStream: (callsign: string) => `/agents/${encodeURIComponent(callsign)}/activity/stream`,
 } as const;
 
 export const DEFAULT_PORT = 8717 as const;
 
 export const ENV = {
-  // Client-side: broker URL + bearer token held in env for c17 / c17-link.
+  // Client-side: broker URL + bearer token held in env for `c17` subcommands.
   url: 'C17_URL',
   token: 'C17_TOKEN',
-  // Server-side: where to find the principal config file + listener config.
+  // Server-side: where to find the team config file + listener config.
   configPath: 'C17_CONFIG_PATH',
   port: 'C17_PORT',
   host: 'C17_HOST',

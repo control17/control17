@@ -6,33 +6,75 @@
  * strongly-typed result or a `ClientError`.
  */
 
-import { AUTH_HEADER, PATHS, PROTOCOL_HEADER, PROTOCOL_VERSION } from './protocol.js';
 import {
-  AgentListSchema,
-  AgentRegistrationSchema,
+  AGENT_PATHS,
+  AUTH_HEADER,
+  OBJECTIVE_PATHS,
+  PATHS,
+  PROTOCOL_HEADER,
+  PROTOCOL_VERSION,
+} from './protocol.js';
+import {
+  BriefingResponseSchema,
+  GetObjectiveResponseSchema,
   HealthResponseSchema,
   HistoryResponseSchema,
+  ListAgentActivityResponseSchema,
+  ListObjectivesResponseSchema,
   MessageSchema,
+  ObjectiveSchema,
   PushPayloadSchema,
   PushResultSchema,
-  WhoamiResponseSchema,
+  PushSubscriptionResponseSchema,
+  RosterResponseSchema,
+  SessionResponseSchema,
+  UploadAgentActivityResponseSchema,
+  VapidPublicKeyResponseSchema,
 } from './schemas.js';
 import type {
-  Agent,
-  AgentRegistration,
+  AgentActivityRow,
+  BriefingResponse,
+  CancelObjectiveRequest,
+  CreateObjectiveRequest,
+  DiscussObjectiveRequest,
+  GetObjectiveResponse,
   HealthResponse,
   HistoryQuery,
+  ListAgentActivityQuery,
+  ListObjectivesQuery,
   Message,
+  Objective,
   PushPayload,
   PushResult,
-  WhoamiResponse,
+  PushSubscriptionPayload,
+  PushSubscriptionResponse,
+  ReassignObjectiveRequest,
+  RosterResponse,
+  SessionResponse,
+  TotpLoginRequest,
+  UpdateObjectiveRequest,
+  UpdateWatchersRequest,
+  UploadAgentActivityRequest,
+  UploadAgentActivityResponse,
+  VapidPublicKeyResponse,
 } from './types.js';
 
 export interface ClientOptions {
   /** Broker base URL, e.g. `http://127.0.0.1:8717`. No trailing slash required. */
   url: string;
-  /** Shared-secret bearer token. Required for all endpoints except `/healthz`. */
-  token: string;
+  /**
+   * Shared-secret bearer token. Optional — omit for human/web-UI usage
+   * where auth comes from the session cookie (`useCookies: true`).
+   * Required for machine/MCP-link usage where no cookie is available.
+   */
+  token?: string;
+  /**
+   * Opt into `credentials: 'include'` on every request — for
+   * browser-side SPAs that rely on the `c17_session` cookie instead
+   * of a bearer token. Has no effect in Node where fetch doesn't
+   * manage cookies automatically.
+   */
+  useCookies?: boolean;
   /** Custom fetch implementation (for tests or polyfills). Defaults to `globalThis.fetch`. */
   fetch?: typeof fetch;
 }
@@ -51,13 +93,20 @@ export class ClientError extends Error {
 
 export class Client {
   private readonly baseUrl: URL;
-  private readonly token: string;
+  private readonly token: string | null;
+  private readonly useCookies: boolean;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: ClientOptions) {
     // Normalize: strip trailing slash so URL composition is predictable.
     this.baseUrl = new URL(`${options.url.replace(/\/+$/, '')}/`);
-    this.token = options.token;
+    this.token = options.token ?? null;
+    this.useCookies = options.useCookies ?? false;
+    if (!this.token && !this.useCookies) {
+      throw new Error(
+        'Client: must provide either `token` (bearer) or `useCookies: true` (session)',
+      );
+    }
     const fetchRef = options.fetch ?? globalThis.fetch;
     if (!fetchRef) {
       throw new Error('Client: no fetch implementation available');
@@ -66,7 +115,7 @@ export class Client {
     this.fetchImpl = fetchRef.bind(globalThis);
   }
 
-  /** Make a request with the protocol header and bearer token. */
+  /** Make a request with the protocol header and credentials. */
   private async request(
     path: string,
     init: RequestInit & { skipAuth?: boolean } = {},
@@ -74,11 +123,15 @@ export class Client {
     const url = new URL(path.replace(/^\//, ''), this.baseUrl);
     const headers = new Headers(init.headers);
     headers.set(PROTOCOL_HEADER, String(PROTOCOL_VERSION));
-    if (!init.skipAuth) {
+    if (!init.skipAuth && this.token) {
       headers.set(AUTH_HEADER, `Bearer ${this.token}`);
     }
     const { skipAuth: _skipAuth, ...rest } = init;
-    return this.fetchImpl(url, { ...rest, headers });
+    const requestInit: RequestInit = { ...rest, headers };
+    if (this.useCookies) {
+      requestInit.credentials = 'include';
+    }
+    return this.fetchImpl(url, requestInit);
   }
 
   private async json<T>(resp: Response): Promise<T> {
@@ -99,13 +152,289 @@ export class Client {
   }
 
   /**
-   * Ask the broker which principal the current bearer token maps to.
-   * Used by the link / TUI to self-derive their canonical agentId at
-   * startup without requiring a separate `C17_AGENT_ID` env var.
+   * Exchange a TOTP code for a session. Succeeds → server sets the
+   * `c17_session` cookie and returns the authenticated slot info.
+   * Failure modes: wrong/stale code → 401, malformed → 400,
+   * too-many-attempts → 429.
    */
-  async whoami(): Promise<WhoamiResponse> {
-    const resp = await this.request(PATHS.whoami, { method: 'GET' });
-    return WhoamiResponseSchema.parse(await this.json(resp));
+  async loginWithTotp(payload: TotpLoginRequest): Promise<SessionResponse> {
+    const resp = await this.request(PATHS.sessionTotp, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      skipAuth: true,
+    });
+    return SessionResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Drop the server-side session and clear the cookie. Safe to call
+   * even if already logged out — returns 200 either way.
+   */
+  async logout(): Promise<void> {
+    const resp = await this.request(PATHS.sessionLogout, {
+      method: 'POST',
+      skipAuth: true,
+    });
+    // Any 2xx is success; no body to validate.
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new ClientError(`logout failed: ${resp.status} ${resp.statusText}`, resp.status, body);
+    }
+  }
+
+  /**
+   * Fetch the current session's slot/role/expiry. Used by the SPA on
+   * mount to rehydrate its session signal before showing any UI.
+   * Returns null on 401 (no / expired session) so callers can treat
+   * "not signed in" as a first-class state without catching errors.
+   */
+  async currentSession(): Promise<SessionResponse | null> {
+    const resp = await this.request(PATHS.session, {
+      method: 'GET',
+      skipAuth: true,
+    });
+    if (resp.status === 401) return null;
+    return SessionResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Fetch the server's VAPID public key. Anonymous — no auth needed.
+   * Used by the SPA's push-subscription flow to pass into
+   * `pushManager.subscribe({applicationServerKey})`.
+   */
+  async vapidPublicKey(): Promise<VapidPublicKeyResponse> {
+    const resp = await this.request(PATHS.pushVapidPublicKey, {
+      method: 'GET',
+      skipAuth: true,
+    });
+    return VapidPublicKeyResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Register (or refresh) a push subscription for the current
+   * authenticated slot. Subsequent calls with the same endpoint
+   * replace the existing row.
+   */
+  async registerPushSubscription(
+    payload: PushSubscriptionPayload,
+  ): Promise<PushSubscriptionResponse> {
+    const resp = await this.request(PATHS.pushSubscriptions, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return PushSubscriptionResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Remove a push subscription by its database id. Scoped to the
+   * authenticated slot server-side.
+   */
+  async deletePushSubscription(id: number): Promise<void> {
+    const resp = await this.request(`${PATHS.pushSubscriptions}/${id}`, {
+      method: 'DELETE',
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new ClientError(
+        `deletePushSubscription failed: ${resp.status} ${resp.statusText}`,
+        resp.status,
+        body,
+      );
+    }
+  }
+
+  /**
+   * Fetch the squadron-context briefing for the authenticated slot.
+   *
+   * Returns the caller's callsign, role, authority, squadron
+   * (name/mission/brief), list of teammates, open objectives currently
+   * on the caller's plate, and a pre-composed `instructions` string
+   * ready for `new Server({instructions})` in the MCP link.
+   */
+  async briefing(): Promise<BriefingResponse> {
+    const resp = await this.request(PATHS.briefing, { method: 'GET' });
+    return BriefingResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * List all slots defined on the squadron (including any not currently
+   * connected) plus the runtime connection state of each registered
+   * agent. Use this for the squadron roster view in the web UI and for
+   * the `roster` MCP tool exposed by the runner.
+   */
+  async roster(): Promise<RosterResponse> {
+    const resp = await this.request(PATHS.roster, { method: 'GET' });
+    return RosterResponseSchema.parse(await this.json(resp));
+  }
+
+  // ─────────────────────── Objectives ───────────────────────
+
+  /**
+   * List objectives. Operators see only their own unless they hold
+   * lieutenant+ authority server-side, in which case the `assignee`
+   * filter accepts any callsign. Pass `status` to scope to a single
+   * lifecycle state; omit to see all.
+   */
+  async listObjectives(query: ListObjectivesQuery = {}): Promise<Objective[]> {
+    const params = new URLSearchParams();
+    if (query.assignee) params.set('assignee', query.assignee);
+    if (query.status) params.set('status', query.status);
+    const qs = params.toString();
+    const path = qs ? `${PATHS.objectives}?${qs}` : PATHS.objectives;
+    const resp = await this.request(path, { method: 'GET' });
+    return ListObjectivesResponseSchema.parse(await this.json(resp)).objectives;
+  }
+
+  /** Fetch a single objective plus its full event history. */
+  async getObjective(id: string): Promise<GetObjectiveResponse> {
+    const resp = await this.request(OBJECTIVE_PATHS.one(id), { method: 'GET' });
+    return GetObjectiveResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Create (and atomically assign) an objective. Requires the caller
+   * to hold `lieutenant` or `commander` authority server-side.
+   */
+  async createObjective(payload: CreateObjectiveRequest): Promise<Objective> {
+    const resp = await this.request(PATHS.objectives, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Update an objective's status (active ↔ blocked), post a note to
+   * its thread, or both. Cannot transition to `done` — use
+   * `completeObjective` for that.
+   */
+  async updateObjective(id: string, payload: UpdateObjectiveRequest): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.one(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Mark an objective done with a required result summary. Only the
+   * objective's current assignee can call this.
+   */
+  async completeObjective(id: string, result: string): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.complete(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result }),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Terminally cancel an objective. Originating lieutenant+ or any
+   * commander.
+   */
+  async cancelObjective(id: string, payload: CancelObjectiveRequest = {}): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.cancel(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Reassign an objective to a different slot. Commander only. Pushes
+   * to both old and new assignee.
+   */
+  async reassignObjective(id: string, payload: ReassignObjectiveRequest): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.reassign(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Add and/or remove watchers on an objective. Commander or the
+   * originating lieutenant+ only. Every callsign must resolve to a
+   * known squadron slot. Empty add/remove arrays are no-ops; the
+   * server still returns the updated objective for sync purposes.
+   */
+  async updateObjectiveWatchers(id: string, payload: UpdateWatchersRequest): Promise<Objective> {
+    const resp = await this.request(OBJECTIVE_PATHS.watchers(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return ObjectiveSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Post a discussion message into an objective's thread. Fans out to
+   * every member of the thread (originator + assignee + commanders +
+   * explicit watchers) via their SSE streams, scoped to thread key
+   * `obj:<id>`. Caller must already be a thread member server-side.
+   */
+  async discussObjective(id: string, payload: DiscussObjectiveRequest): Promise<Message> {
+    const resp = await this.request(OBJECTIVE_PATHS.discuss(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return MessageSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * Append agent activity events for `callsign`. Only the slot
+   * itself may POST its own activity (server returns 403 for any
+   * other caller). Used by the runner's streaming uploader to
+   * ship decoded HTTP exchanges + objective lifecycle markers to
+   * the broker in real time.
+   */
+  async uploadAgentActivity(
+    callsign: string,
+    payload: UploadAgentActivityRequest,
+  ): Promise<UploadAgentActivityResponse> {
+    const resp = await this.request(AGENT_PATHS.activity(callsign), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return UploadAgentActivityResponseSchema.parse(await this.json(resp));
+  }
+
+  /**
+   * List agent activity events for `callsign`. Readable by the slot
+   * itself OR any commander (non-commanders reading other slots
+   * get 403). Supports range filtering by `from`/`to` timestamps
+   * and by kind. Returns newest-first up to `limit` rows.
+   *
+   * Objective traces are a view over this endpoint: query with
+   * `from=objective.openedAt`, `to=objective.closedAt`, and
+   * `kind=llm_exchange` to pull the LLM calls made during an
+   * objective's lifetime.
+   */
+  async listAgentActivity(
+    callsign: string,
+    query: ListAgentActivityQuery = {},
+  ): Promise<AgentActivityRow[]> {
+    const params = new URLSearchParams();
+    if (query.from !== undefined) params.set('from', String(query.from));
+    if (query.to !== undefined) params.set('to', String(query.to));
+    if (query.kind !== undefined) {
+      const kinds = Array.isArray(query.kind) ? query.kind : [query.kind];
+      for (const k of kinds) params.append('kind', k);
+    }
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    const qs = params.toString();
+    const path = qs ? `${AGENT_PATHS.activity(callsign)}?${qs}` : AGENT_PATHS.activity(callsign);
+    const resp = await this.request(path, { method: 'GET' });
+    return ListAgentActivityResponseSchema.parse(await this.json(resp)).activity;
   }
 
   async history(query: HistoryQuery = {}): Promise<Message[]> {
@@ -118,21 +447,6 @@ export class Client {
     const resp = await this.request(path, { method: 'GET' });
     const parsed = HistoryResponseSchema.parse(await this.json(resp));
     return parsed.messages;
-  }
-
-  async register(agentId: string): Promise<AgentRegistration> {
-    const resp = await this.request(PATHS.register, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId }),
-    });
-    return AgentRegistrationSchema.parse(await this.json(resp));
-  }
-
-  async listAgents(): Promise<Agent[]> {
-    const resp = await this.request(PATHS.agents, { method: 'GET' });
-    const parsed = AgentListSchema.parse(await this.json(resp));
-    return parsed.agents;
   }
 
   async push(payload: PushPayload): Promise<PushResult> {

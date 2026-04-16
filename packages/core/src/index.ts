@@ -6,8 +6,16 @@
  * `EventLog` interface.
  */
 
-export { Broker, type BrokerLogger, type BrokerOptions } from './broker.js';
 export {
+  Broker,
+  type BrokerLogger,
+  type BrokerOptions,
+  type IdentityContext,
+  type PushContext,
+  type RegistrationResult,
+} from './broker.js';
+export {
+  clampQueryLimit,
   DEFAULT_QUERY_LIMIT,
   type EventLog,
   type EventLogQueryOptions,

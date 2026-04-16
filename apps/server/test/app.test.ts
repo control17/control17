@@ -1,12 +1,37 @@
 import { Broker, InMemoryEventLog } from '@control17/core';
 import { PROTOCOL_HEADER } from '@control17/sdk/protocol';
-import type { Message } from '@control17/sdk/types';
+import type {
+  BriefingResponse,
+  Message,
+  Role,
+  RosterResponse,
+  Squadron,
+} from '@control17/sdk/types';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
-import { createPrincipalStore } from '../src/principals.js';
+import { openDatabase } from '../src/db.js';
+import { SessionStore } from '../src/sessions.js';
+import { createSlotStore } from '../src/slots.js';
 
-const ALICE_TOKEN = 'c17_test_alice_secret';
+const OP_TOKEN = 'c17_test_operator_secret';
 const BOT_TOKEN = 'c17_test_bot_secret';
+
+const SQUADRON: Squadron = {
+  name: 'alpha-squadron',
+  mission: 'Ship and operate the payment service.',
+  brief: 'We own the full lifecycle.',
+};
+
+const ROLES: Record<string, Role> = {
+  operator: {
+    description: 'Directs the squadron.',
+    instructions: 'Lead the squadron.',
+  },
+  implementer: {
+    description: 'Writes code.',
+    instructions: 'Ship work and report status.',
+  },
+};
 
 function makeApp() {
   const broker = new Broker({
@@ -14,13 +39,19 @@ function makeApp() {
     now: () => 1_700_000_000_000,
     idFactory: () => 'msg-fixed',
   });
-  const principals = createPrincipalStore([
-    { name: 'alice', kind: 'human', token: ALICE_TOKEN },
-    { name: 'build-bot', kind: 'agent', token: BOT_TOKEN },
+  const slots = createSlotStore([
+    { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: OP_TOKEN },
+    { callsign: 'build-bot', role: 'implementer', token: BOT_TOKEN },
   ]);
+  // Tests run with an in-memory SQLite solely for the sessions table.
+  const db = openDatabase(':memory:');
+  const sessions = new SessionStore(db);
   const app = createApp({
     broker,
-    principals,
+    slots,
+    sessions,
+    squadron: SQUADRON,
+    roles: ROLES,
     version: '0.0.0',
     logger: {
       debug: vi.fn(),
@@ -29,7 +60,7 @@ function makeApp() {
       error: vi.fn(),
     },
   });
-  return { app, broker };
+  return { app, broker, slots, sessions, db };
 }
 
 function authed(token: string, body?: unknown): RequestInit {
@@ -55,49 +86,68 @@ describe('app GET /healthz', () => {
   });
 });
 
-describe('app GET /whoami', () => {
-  it('returns the authenticated principal', async () => {
+describe('app GET /briefing', () => {
+  it('returns the squadron-context briefing for the authenticated slot', async () => {
     const { app } = makeApp();
-    const res = await app.request('/whoami', authed(ALICE_TOKEN));
+    const res = await app.request('/briefing', authed(OP_TOKEN));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ name: 'alice', kind: 'human' });
+    const body = (await res.json()) as BriefingResponse;
+    expect(body.callsign).toBe('ACTUAL');
+    expect(body.role).toBe('operator');
+    expect(body.authority).toBe('commander');
+    expect(body.squadron).toEqual(SQUADRON);
+    expect(body.teammates.map((t) => t.callsign).sort()).toEqual(['ACTUAL', 'build-bot']);
+    expect(body.openObjectives).toEqual([]);
+    expect(body.instructions).toContain('ACTUAL');
+    expect(body.instructions).toContain('operator');
+    expect(body.instructions).toContain(SQUADRON.mission);
+  });
+
+  it('returns authority=operator for slots that omit authority in their config', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/briefing', authed(BOT_TOKEN));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as BriefingResponse;
+    expect(body.callsign).toBe('build-bot');
+    expect(body.role).toBe('implementer');
+    expect(body.authority).toBe('operator');
   });
 
   it('requires auth', async () => {
     const { app } = makeApp();
-    const res = await app.request('/whoami');
+    const res = await app.request('/briefing');
     expect(res.status).toBe(401);
   });
 });
 
 describe('app auth', () => {
-  it('rejects /agents without a bearer token', async () => {
+  it('rejects /roster without a bearer token', async () => {
     const { app } = makeApp();
-    const res = await app.request('/agents');
+    const res = await app.request('/roster');
     expect(res.status).toBe(401);
   });
 
-  it('rejects /agents with an unknown token', async () => {
+  it('rejects /roster with an unknown token', async () => {
     const { app } = makeApp();
-    const res = await app.request('/agents', {
+    const res = await app.request('/roster', {
       headers: { Authorization: 'Bearer not-in-config' },
     });
     expect(res.status).toBe(401);
   });
 
-  it('accepts /agents from any configured principal', async () => {
+  it('accepts /roster from any configured slot', async () => {
     const { app } = makeApp();
-    const asAlice = await app.request('/agents', authed(ALICE_TOKEN));
-    expect(asAlice.status).toBe(200);
-    const asBot = await app.request('/agents', authed(BOT_TOKEN));
+    const asOp = await app.request('/roster', authed(OP_TOKEN));
+    expect(asOp.status).toBe(200);
+    const asBot = await app.request('/roster', authed(BOT_TOKEN));
     expect(asBot.status).toBe(200);
   });
 
   it('rejects requests with a mismatched protocol version', async () => {
     const { app } = makeApp();
-    const res = await app.request('/agents', {
+    const res = await app.request('/roster', {
       headers: {
-        Authorization: `Bearer ${ALICE_TOKEN}`,
+        Authorization: `Bearer ${OP_TOKEN}`,
         [PROTOCOL_HEADER]: '999',
       },
     });
@@ -105,52 +155,40 @@ describe('app auth', () => {
   });
 });
 
-describe('app POST /register', () => {
-  it('registers the caller under its own principal name', async () => {
-    const { app } = makeApp();
-    const reg = await app.request('/register', authed(BOT_TOKEN, { agentId: 'build-bot' }));
-    expect(reg.status).toBe(200);
-    const regBody = (await reg.json()) as { agentId: string };
-    expect(regBody.agentId).toBe('build-bot');
+describe('app GET /roster', () => {
+  it('returns all teammates from the slot config plus runtime connection state', async () => {
+    const { app, broker } = makeApp();
+    // Pre-seed both slots so they appear in connected state
+    broker.seedSlots([
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
+      { callsign: 'build-bot', role: 'implementer', authority: 'operator' },
+    ]);
 
-    const list = await app.request('/agents', authed(ALICE_TOKEN));
-    const listBody = (await list.json()) as {
-      agents: Array<{ agentId: string; kind: string | null }>;
-    };
-    expect(listBody.agents).toHaveLength(1);
-    expect(listBody.agents[0]?.agentId).toBe('build-bot');
-    expect(listBody.agents[0]?.kind).toBe('agent');
-  });
-
-  it('rejects register when agentId does not equal the principal name', async () => {
-    const { app } = makeApp();
-    const res = await app.request('/register', authed(BOT_TOKEN, { agentId: 'alice' }));
-    expect(res.status).toBe(403);
-  });
-
-  it('rejects registration with invalid agentId', async () => {
-    const { app } = makeApp();
-    const res = await app.request('/register', authed(ALICE_TOKEN, { agentId: 'has spaces' }));
-    expect(res.status).toBe(400);
+    const res = await app.request('/roster', authed(OP_TOKEN));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RosterResponse;
+    expect(body.teammates.map((t) => t.callsign).sort()).toEqual(['ACTUAL', 'build-bot']);
+    expect(body.connected.map((a) => a.agentId).sort()).toEqual(['ACTUAL', 'build-bot']);
+    expect(body.connected.every((a) => a.connected === 0)).toBe(true);
   });
 });
 
 describe('app GET /subscribe identity', () => {
-  it('rejects subscribe to an agentId other than the principal name', async () => {
+  it('rejects subscribe to a callsign other than the caller', async () => {
     const { app } = makeApp();
-    const res = await app.request('/subscribe?agentId=build-bot', authed(ALICE_TOKEN));
+    const res = await app.request('/subscribe?agentId=build-bot', authed(OP_TOKEN));
     expect(res.status).toBe(403);
   });
 
   it('requires agentId query parameter', async () => {
     const { app } = makeApp();
-    const res = await app.request('/subscribe', authed(ALICE_TOKEN));
+    const res = await app.request('/subscribe', authed(OP_TOKEN));
     expect(res.status).toBe(400);
   });
 });
 
 describe('app POST /push', () => {
-  it('delivers a targeted push and stamps from=<principal.name>', async () => {
+  it('delivers a targeted push and stamps from=<callsign>', async () => {
     const { app, broker } = makeApp();
     await broker.register('build-bot');
     const received: Message[] = [];
@@ -160,7 +198,7 @@ describe('app POST /push', () => {
 
     const res = await app.request(
       '/push',
-      authed(ALICE_TOKEN, { agentId: 'build-bot', body: 'hello' }),
+      authed(OP_TOKEN, { agentId: 'build-bot', body: 'hello' }),
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -170,19 +208,19 @@ describe('app POST /push', () => {
     expect(body.delivery.sse).toBe(1);
     expect(body.delivery.targets).toBe(1);
     expect(body.message.body).toBe('hello');
-    expect(body.message.from).toBe('alice');
+    expect(body.message.from).toBe('ACTUAL');
     expect(received).toHaveLength(1);
-    expect(received[0]?.from).toBe('alice');
+    expect(received[0]?.from).toBe('ACTUAL');
   });
 
   it('fans out a DM to the sender if the sender is registered', async () => {
     const { app, broker } = makeApp();
     await broker.register('build-bot');
-    await broker.register('alice');
-    const aliceInbox: Message[] = [];
+    await broker.register('ACTUAL');
+    const opInbox: Message[] = [];
     const botInbox: Message[] = [];
-    broker.subscribe('alice', (m) => {
-      aliceInbox.push(m);
+    broker.subscribe('ACTUAL', (m) => {
+      opInbox.push(m);
     });
     broker.subscribe('build-bot', (m) => {
       botInbox.push(m);
@@ -190,14 +228,14 @@ describe('app POST /push', () => {
 
     const res = await app.request(
       '/push',
-      authed(ALICE_TOKEN, { agentId: 'build-bot', body: 'status?' }),
+      authed(OP_TOKEN, { agentId: 'build-bot', body: 'status?' }),
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { delivery: { sse: number; targets: number } };
     expect(body.delivery.targets).toBe(1);
     expect(body.delivery.sse).toBe(2);
     expect(botInbox).toHaveLength(1);
-    expect(aliceInbox).toHaveLength(1);
+    expect(opInbox).toHaveLength(1);
   });
 
   it('stamps from based on which token authenticated, not on payload', async () => {
@@ -212,15 +250,15 @@ describe('app POST /push', () => {
     expect(body.message.data).toEqual({ from: 'spoofed' });
   });
 
-  it('returns 404 when targeting an unknown agent', async () => {
+  it('returns 404 when targeting an unknown callsign', async () => {
     const { app } = makeApp();
-    const res = await app.request('/push', authed(ALICE_TOKEN, { agentId: 'ghost', body: 'hi' }));
+    const res = await app.request('/push', authed(OP_TOKEN, { agentId: 'ghost', body: 'hi' }));
     expect(res.status).toBe(404);
   });
 
   it('returns 400 for invalid push body', async () => {
     const { app } = makeApp();
-    const res = await app.request('/push', authed(ALICE_TOKEN, { body: '' }));
+    const res = await app.request('/push', authed(OP_TOKEN, { body: '' }));
     expect(res.status).toBe(400);
   });
 
@@ -228,46 +266,74 @@ describe('app POST /push', () => {
     const { app, broker } = makeApp();
     await broker.register('a1');
     await broker.register('a2');
-    const res = await app.request('/push', authed(ALICE_TOKEN, { body: 'broadcast' }));
+    const res = await app.request('/push', authed(OP_TOKEN, { body: 'broadcast' }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { delivery: { targets: number } };
     expect(body.delivery.targets).toBe(2);
   });
+
+  it('treats explicit agentId: null as a broadcast', async () => {
+    const { app, broker } = makeApp();
+    await broker.register('a1');
+    const res = await app.request(
+      '/push',
+      authed(OP_TOKEN, { agentId: null, body: 'null-target' }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      delivery: { targets: number };
+      message: { agentId: string | null };
+    };
+    expect(body.delivery.targets).toBe(1);
+    expect(body.message.agentId).toBeNull();
+  });
 });
 
 describe('app GET /history', () => {
-  it('returns broadcasts and DMs relevant to the authenticated caller', async () => {
-    const { app } = makeApp();
-    // Push a broadcast and a DM to alice.
-    await app.request('/push', authed(BOT_TOKEN, { body: 'broadcast' }));
-    await app.request('/push', authed(BOT_TOKEN, { agentId: 'alice', body: 'dm to alice' }));
-    // Register alice so the push to alice succeeds
-    // (push 404s if target is unknown — pre-register)
-    // Actually, pushes to unknown agents 404 at the HTTP layer; we need to
-    // register alice first, then push again.
-  });
-
   it('returns history filtered by the with parameter', async () => {
     const { app, broker } = makeApp();
-    await broker.register('alice');
+    await broker.register('ACTUAL');
     await broker.register('build-bot');
 
     // Use the broker directly to push so we can set from.
-    await broker.push({ body: 'broadcast' }, { from: 'alice' });
-    await broker.push({ agentId: 'build-bot', body: 'dm to bot' }, { from: 'alice' });
-    await broker.push({ agentId: 'alice', body: 'dm from bot' }, { from: 'build-bot' });
+    await broker.push({ body: 'broadcast' }, { from: 'ACTUAL' });
+    await broker.push({ agentId: 'build-bot', body: 'dm to bot' }, { from: 'ACTUAL' });
+    await broker.push({ agentId: 'ACTUAL', body: 'dm from bot' }, { from: 'build-bot' });
 
-    // Full feed for alice: broadcast + both DMs
-    const full = await app.request('/history', authed(ALICE_TOKEN));
+    // Full feed for operator: broadcast + both DMs
+    const full = await app.request('/history', authed(OP_TOKEN));
     expect(full.status).toBe(200);
     const fullBody = (await full.json()) as { messages: Array<{ body: string }> };
     expect(fullBody.messages).toHaveLength(3);
 
     // DMs with build-bot only
-    const dm = await app.request('/history?with=build-bot', authed(ALICE_TOKEN));
+    const dm = await app.request('/history?with=build-bot', authed(OP_TOKEN));
     expect(dm.status).toBe(200);
     const dmBody = (await dm.json()) as { messages: Array<{ body: string }> };
     expect(dmBody.messages).toHaveLength(2);
     expect(dmBody.messages.every((m) => m.body.includes('dm'))).toBe(true);
+  });
+
+  it('rejects an invalid `with` callsign with 400', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/history?with=%00%20bad%20callsign', authed(OP_TOKEN));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a non-finite `before` parameter with 400', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/history?before=not-a-number', authed(OP_TOKEN));
+    expect(res.status).toBe(400);
+  });
+
+  it('clamps limit=0 to the default page size', async () => {
+    const { app, broker } = makeApp();
+    for (let i = 0; i < 3; i++) {
+      await broker.push({ body: `msg-${i}` }, { from: 'ACTUAL' });
+    }
+    const res = await app.request('/history?limit=0', authed(OP_TOKEN));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { messages: unknown[] };
+    expect(body.messages.length).toBe(3);
   });
 });

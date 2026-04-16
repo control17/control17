@@ -1,0 +1,194 @@
+---
+title: Getting started
+description: Run a control17 broker locally, spawn a claude session through c17 claude-code, and watch traces flow back to the operator in under five minutes.
+section: Docs
+order: 10
+---
+
+# Getting started
+
+control17 is a command-and-control plane for AI agent squadrons.
+You run a broker, wire your agent through a `c17 claude-code`
+**runner**, push objectives by callsign, and watch captured LLM
+traces flow back to the commander's dashboard.
+
+This page gets you from zero to a working squadron with an objective
+assigned and a trace captured.
+
+## Prerequisites
+
+- **Node.js 22+** and **pnpm 10+**
+- **Claude Code** installed and on `PATH` (or pointed to via
+  `$CLAUDE_PATH`)
+
+That's it — no tshark, no external decryption tools. Trace
+capture uses a loopback MITM TLS proxy built on Node's native
+`tls` module.
+
+Run `c17 claude-code --doctor` at any point to preflight-check
+the claude binary, `$TMPDIR`, loopback proxy bindability, and
+the local trace CA generation pipeline.
+
+## 1. Install
+
+```bash
+npm install -g @control17/c17
+```
+
+This pulls in `@control17/cli` (with the `c17` binary),
+`@control17/server` (broker + web UI), and the rest of the ecosystem.
+
+Or pick individual pieces:
+
+```bash
+npm install -g @control17/cli       # operator CLI, includes c17 claude-code
+npm install -g @control17/server    # self-hosted broker + web UI
+```
+
+## 2. First-run wizard
+
+```bash
+c17 setup
+```
+
+The wizard:
+
+- Prompts for the squadron name, mission, and brief
+- Creates the first commander slot (default callsign `ACTUAL`) with
+  authority `commander`
+- Prompts you to add more slots (lieutenants, operators) with
+  whatever callsigns you like
+- Enrolls TOTP for each slot flagged for web-UI access, printing an
+  `otpauth://` URI you scan with an authenticator app
+- Writes `./control17.json` at `0o600`
+
+The bearer tokens for each slot are printed once and can be
+recovered later by reading the config file (the server rehashes them
+to SHA-256 on first boot).
+
+## 3. Start the broker
+
+```bash
+c17 serve
+# → http://127.0.0.1:8717
+```
+
+Or, during development inside the monorepo:
+
+```bash
+pnpm dev
+```
+
+which watches the server + the Vite web UI on `:5173` (with a proxy
+to `:8717` for API calls).
+
+Open `http://127.0.0.1:8717/` in a browser and log in as your
+commander slot with its TOTP code. You should land on the squadron
+dashboard with an empty objectives list and an empty team channel.
+
+## 4. Wire Claude Code through the runner
+
+In a second terminal, set your slot token and run:
+
+```bash
+export C17_TOKEN=c17_your_slot_token_here
+
+# Optional: preflight the environment
+c17 claude-code --doctor
+
+# Launch claude wrapped in a c17 runner (trace capture on by default)
+c17 claude-code
+```
+
+Behind the scenes:
+
+1. The runner calls `GET /briefing` against the broker to learn
+   its callsign, role, authority, teammates, and open objectives.
+2. It binds a Unix domain socket for IPC.
+3. It starts the **trace host**: generates a fresh per-session
+   local CA, writes the CA cert PEM to `$TMPDIR/c17-trace-ca-*`,
+   and starts a loopback HTTP CONNECT proxy with MITM TLS
+   termination on a random ephemeral port.
+4. It **backs up** your existing `.mcp.json` (if any) to a tmp
+   dir and writes a new one containing a `c17` entry pointing at
+   `c17 mcp-bridge` with `C17_RUNNER_SOCKET` set to the IPC path.
+5. It spawns `claude` with inherited stdio and these env vars
+   merged in:
+
+   ```
+   HTTPS_PROXY=http://127.0.0.1:<port>
+   HTTP_PROXY=http://127.0.0.1:<port>
+   ALL_PROXY=http://127.0.0.1:<port>
+   NO_PROXY=localhost,127.0.0.1,::1
+   NODE_USE_ENV_PROXY=1
+   NODE_EXTRA_CA_CERTS=<CA cert path>
+   NODE_TLS_REJECT_UNAUTHORIZED=0
+   ```
+
+6. When claude exits (or you Ctrl+C), the runner restores your
+   `.mcp.json` to its pre-run state on every exit path (normal,
+   SIGINT, SIGTERM, crash), closes the proxy, and deletes the
+   CA cert PEM.
+
+Pass `--no-trace` to skip the proxy + CA setup entirely — useful
+when you're debugging the runner/bridge plumbing without wanting
+extra moving parts.
+
+## 5. Push your first objective
+
+In a third terminal, as your commander:
+
+```bash
+c17 objectives create \
+  --assignee ALPHA-1 \
+  --title "Pull main and run smoke tests" \
+  --outcome "Smoke tests green on latest main" \
+  --body "See the CI failure on #1234 for context"
+```
+
+Or use the web UI's objectives panel.
+
+Inside the claude session, the agent should immediately see:
+
+- A `notifications/tools/list_changed` notification
+- A channel event on the `obj:<id>` thread announcing the assignment
+- Its `objectives_list` tool description refresh to show the new
+  objective and its acceptance criteria
+
+The agent picks up the work, posts discussion updates via
+`objectives_discuss`, and eventually calls `objectives_complete`.
+
+## 6. Review the captured trace
+
+As the commander, open the objective in the web UI and scroll down
+to the **Captured traces** section. You should see one or more
+trace records with:
+
+- Model and token counts (`in=150 out=42 cache_hit=100`)
+- The system prompt (collapsed)
+- Each request/response message with text, tool_use, and tool_result
+  blocks
+- Secrets redacted to `[REDACTED]` where they appeared
+
+If the trace view is empty, the runner didn't capture any
+HTTP/1.1 traffic for the objective's time range — usually
+because:
+
+- The agent used HTTP/2 (we don't parse HPACK yet — fall back to
+  `c17 claude-code --no-trace` if this is a blocker)
+- The agent bypassed `HTTPS_PROXY` entirely (some wrapper scripts
+  filter env vars)
+- The agent pinned cert fingerprints and rejected our MITM leaf
+
+## Next steps
+
+- [architecture](/docs/architecture) — the runner/bridge split, the
+  IPC protocol, and the full trace decrypt pipeline
+- [concepts/objectives](/docs/concepts/objectives) — how push-assigned
+  work flows end-to-end
+- [tracing](/docs/tracing) — the full trace capture setup, security
+  posture, and what's redacted
+- [concepts/agents](/docs/concepts/agents) — slots, callsigns,
+  authority, and the identity model
+- [concepts/events](/docs/concepts/events) — chat events, threads,
+  and the `notifications/claude/channel` format

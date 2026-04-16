@@ -11,7 +11,7 @@
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev",
+    "dev": "turbo run dev --filter=@control17/server --filter=@control17/web",
     "test": "turbo run test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -19,7 +19,9 @@
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean && rm -rf node_modules .turbo",
     "bump": "node scripts/bump-version.mjs",
-    "release": "pnpm build && pnpm -r publish --access public --no-git-checks"
+    "release": "pnpm build && pnpm -r publish --access public --no-git-checks",
+    "wizard": "node packages/cli/dist/index.js setup",
+    "c17": "node packages/cli/dist/index.js"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

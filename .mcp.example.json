@@ -1,13 +1,12 @@
 {
-  "_comment": "Copy this to .mcp.json in a Claude Code project to plug into a running control17 broker. .mcp.json is gitignored because it contains secrets and absolute paths.",
+  "_comment": "Copy this to .mcp.json in a Claude Code project to plug into a running control17 broker. The link derives its callsign from the /briefing endpoint at startup — the token maps to a slot on the team, and the slot's callsign is what appears on the net. .mcp.json is gitignored because it contains secrets and absolute paths.",
   "mcpServers": {
     "c17": {
       "command": "node",
       "args": ["/absolute/path/to/control17/packages/link/dist/index.js"],
       "env": {
         "C17_URL": "http://127.0.0.1:8717",
-        "C17_TOKEN": "your-dev-token-here",
-        "C17_AGENT_ID": "pick-a-unique-id"
+        "C17_TOKEN": "your-slot-token-here"
       }
     }
   }

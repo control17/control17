@@ -28,7 +28,7 @@ export interface EventLogTailOptions {
  */
 export interface EventLogQueryOptions {
   viewer: string;
-  /** If set, narrow to DMs between viewer and this other principal. */
+  /** If set, narrow to DMs between viewer and this other callsign. */
   with?: string;
   /** Hard upper bound on rows returned. Defaults to 100, max 1000. */
   limit?: number;
@@ -41,8 +41,8 @@ export interface EventLog {
   tail(options?: EventLogTailOptions): Promise<Message[]>;
   /**
    * Return messages relevant to the viewer, newest-first. Used by
-   * the broker's /history endpoint to hydrate the TUI on connect and
-   * after reconnects.
+   * the broker's /history endpoint to hydrate the web UI on connect
+   * and after reconnects.
    */
   query(options: EventLogQueryOptions): Promise<Message[]>;
   /** Close any underlying resources. No-op for in-memory impl. */
@@ -51,6 +51,19 @@ export interface EventLog {
 
 export const DEFAULT_QUERY_LIMIT = 100;
 export const MAX_QUERY_LIMIT = 1000;
+
+/**
+ * Normalize a caller-provided `limit` to a safe query size.
+ * - `undefined` / non-finite → DEFAULT_QUERY_LIMIT
+ * - `<= 0` → DEFAULT_QUERY_LIMIT (caller likely passed a bad value;
+ *   return a useful default instead of a no-op query)
+ * - `> MAX_QUERY_LIMIT` → clamped
+ */
+export function clampQueryLimit(raw: number | undefined): number {
+  if (raw === undefined) return DEFAULT_QUERY_LIMIT;
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_QUERY_LIMIT;
+  return Math.min(Math.floor(raw), MAX_QUERY_LIMIT);
+}
 
 /** In-memory event log. Useful for tests and ephemeral dev runs. */
 export class InMemoryEventLog implements EventLog {
@@ -68,7 +81,7 @@ export class InMemoryEventLog implements EventLog {
   }
 
   async query(options: EventLogQueryOptions): Promise<Message[]> {
-    const limit = clampLimit(options.limit);
+    const limit = clampQueryLimit(options.limit);
     const matches: Message[] = [];
     // Walk newest-first so we can bail out once we've filled `limit`.
     for (let i = this.events.length - 1; i >= 0; i--) {
@@ -103,10 +116,4 @@ function matchesViewer(ev: Message, viewer: string, withOther?: string): boolean
   if (ev.from === viewer) return true;
   if (ev.agentId === viewer) return true;
   return false;
-}
-
-function clampLimit(raw: number | undefined): number {
-  if (raw === undefined) return DEFAULT_QUERY_LIMIT;
-  if (raw <= 0) return DEFAULT_QUERY_LIMIT;
-  return Math.min(raw, MAX_QUERY_LIMIT);
 }

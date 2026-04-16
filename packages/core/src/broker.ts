@@ -5,22 +5,15 @@
  * Knows nothing about HTTP, MCP, or persistence; runtime adapters layer
  * those on top.
  *
- * Identity model: every authenticated caller has a principal name. The
- * broker enforces `agentId === principal.name` on register and
- * subscribe, so a principal can only act on its own canonical agent.
+ * Identity model: every authenticated caller occupies a slot with a
+ * unique `callsign`. The broker enforces `agentId === callsign` on
+ * register and subscribe, so a slot can only act on its own agent.
  * DMs go to the target agent and also fan out to the sender's agent
  * (if registered), which keeps multiple live sessions of the same
- * principal in sync with zero client-side bookkeeping.
+ * slot in sync with zero client-side bookkeeping.
  */
 
-import type {
-  Agent,
-  AgentRegistration,
-  Message,
-  PrincipalKind,
-  PushPayload,
-  PushResult,
-} from '@control17/sdk/types';
+import type { Agent, Message, PushPayload, PushResult, Slot } from '@control17/sdk/types';
 import type { EventLog } from './event-log.js';
 import { AgentIdentityError, AgentRegistry, type AgentState, type Subscriber } from './registry.js';
 
@@ -41,7 +34,7 @@ export interface BrokerOptions {
 
 /**
  * Per-push context supplied by the runtime adapter. `from` is the
- * authenticated principal name; the broker stamps it onto
+ * authenticated slot's callsign; the broker stamps it onto
  * `message.from` verbatim and never reads sender identity from the
  * payload. Pass `from: null` for unauthenticated / system-originated
  * pushes (tests, internal fanout).
@@ -51,15 +44,20 @@ export interface PushContext {
 }
 
 /**
- * Per-register / per-subscribe context. `principal` is the caller's
- * authenticated principal name — the broker checks it matches the
- * `agentId` being registered/subscribed. Pass `principal: null` to
+ * Per-register / per-subscribe context. `callsign` is the caller's
+ * authenticated identity — the broker checks it matches the
+ * `agentId` being registered/subscribed. Pass `callsign: null` to
  * skip the check (tests, in-process core usage without a runtime).
- * `kind` is cosmetic.
+ * `role` is cosmetic and surfaces on the agent's roster entry.
  */
 export interface IdentityContext {
-  principal?: string | null;
-  kind?: PrincipalKind | null;
+  callsign?: string | null;
+  role?: string | null;
+}
+
+export interface RegistrationResult {
+  agentId: string;
+  registeredAt: number;
 }
 
 const NOOP_LOGGER: BrokerLogger = {
@@ -92,20 +90,34 @@ export class Broker {
 
   /**
    * Explicitly register an agent so it shows up in listAgents(). If
-   * `context.principal` is supplied it must equal `agentId`; any
+   * `context.callsign` is supplied it must equal `agentId`; any
    * mismatch throws `AgentIdentityError`. Core tests skip the check
    * by passing no context.
    */
   async register(
     agentId: string,
     context: IdentityContext = EMPTY_IDENTITY,
-  ): Promise<AgentRegistration> {
-    this.assertIdentity(agentId, context.principal);
-    const state = this.registry.registerOrGet(agentId, this.now(), context.kind ?? null);
+  ): Promise<RegistrationResult> {
+    this.assertIdentity(agentId, context.callsign);
+    const state = this.registry.registerOrGet(agentId, this.now(), context.role ?? null);
     return {
       agentId: state.agent.agentId,
       registeredAt: state.agent.createdAt,
     };
+  }
+
+  /**
+   * Pre-populate the registry with every slot defined in the team
+   * config. Called once at server boot so the roster shows the full
+   * team structure even before anyone has connected. Connection state
+   * is still tracked live via SSE subscribers; seeding only creates
+   * the zero-subscriber AgentState entry.
+   */
+  seedSlots(slots: Iterable<Slot>): void {
+    const ts = this.now();
+    for (const slot of slots) {
+      this.registry.registerOrGet(slot.callsign, ts, slot.role, slot.authority);
+    }
   }
 
   /**
@@ -151,7 +163,13 @@ export class Broker {
     let sse = 0;
     for (const state of targetStates) {
       state.agent.lastSeen = ts;
-      for (const sub of state.subscribers) {
+      // Snapshot before iterating — a subscriber callback is allowed
+      // to mutate the Set (e.g. self-unsubscribe, or trigger cleanup
+      // that removes another subscriber). Iterating a live Set during
+      // async callbacks is technically well-defined for deletions but
+      // too subtle to rely on.
+      const subscribers = [...state.subscribers];
+      for (const sub of subscribers) {
         try {
           await sub(message);
           sse++;
@@ -177,7 +195,7 @@ export class Broker {
   /**
    * Attach a subscriber. The agent is auto-registered if unknown so
    * callers don't have to make a separate register() call. Identity
-   * is checked the same way as `register` — a mismatched principal
+   * is checked the same way as `register` — a mismatched callsign
    * throws `AgentIdentityError`.
    */
   subscribe(
@@ -185,8 +203,8 @@ export class Broker {
     callback: Subscriber,
     context: IdentityContext = EMPTY_IDENTITY,
   ): () => void {
-    this.assertIdentity(agentId, context.principal);
-    const state = this.registry.registerOrGet(agentId, this.now(), context.kind ?? null);
+    this.assertIdentity(agentId, context.callsign);
+    const state = this.registry.registerOrGet(agentId, this.now(), context.role ?? null);
     state.subscribers.add(callback);
     return () => {
       const current = this.registry.get(agentId);
@@ -206,10 +224,10 @@ export class Broker {
     return this.eventLog;
   }
 
-  private assertIdentity(agentId: string, principal: string | null | undefined): void {
-    if (principal == null) return;
-    if (principal !== agentId) {
-      throw new AgentIdentityError(agentId, principal);
+  private assertIdentity(agentId: string, callsign: string | null | undefined): void {
+    if (callsign == null) return;
+    if (callsign !== agentId) {
+      throw new AgentIdentityError(agentId, callsign);
     }
   }
 }

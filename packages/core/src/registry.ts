@@ -5,13 +5,13 @@
  * agent. The Node server creates one subscriber per live SSE connection;
  * anything else that wants to observe pushes can attach the same way.
  *
- * Identity model: `agentId === principal.name`. The broker enforces
+ * Identity model: `agentId === slot.callsign`. The broker enforces
  * this at the register/subscribe call sites (the registry itself is
  * identity-agnostic so core stays testable without wiring up auth).
  * A mismatched identity surfaces as `AgentIdentityError`.
  */
 
-import type { Agent, Message, PrincipalKind } from '@control17/sdk/types';
+import type { Agent, Authority, Message } from '@control17/sdk/types';
 
 export type Subscriber = (message: Message) => void | Promise<void>;
 
@@ -22,20 +22,20 @@ export interface AgentState {
 
 /**
  * Thrown by `Broker.register` / `Broker.subscribe` when the caller's
- * authenticated principal doesn't match the agentId they're trying to
- * act on. Runtime adapters translate this into an HTTP 403.
+ * authenticated slot callsign doesn't match the agentId they're trying
+ * to act on. Runtime adapters translate this into an HTTP 403.
  */
 export class AgentIdentityError extends Error {
   readonly agentId: string;
-  readonly principal: string;
-  constructor(agentId: string, principal: string) {
+  readonly callsign: string;
+  constructor(agentId: string, callsign: string) {
     super(
-      `principal '${principal}' cannot act on agent '${agentId}'; ` +
-        `agentId must equal the calling principal's name`,
+      `slot '${callsign}' cannot act on agent '${agentId}'; ` +
+        `agentId must equal the calling slot's callsign`,
     );
     this.name = 'AgentIdentityError';
     this.agentId = agentId;
-    this.principal = principal;
+    this.callsign = callsign;
   }
 }
 
@@ -44,12 +44,17 @@ export class AgentRegistry {
 
   /**
    * Look up or create an agent state entry. Updates `lastSeen` on each
-   * call so the list endpoint reflects recent activity. If `kind` is
-   * provided on first registration, it becomes the agent's cosmetic
-   * classification; subsequent calls with a different `kind` leave
-   * the existing one in place (first-register-wins).
+   * call so the list endpoint reflects recent activity. Role + authority
+   * are first-register-wins: once set, subsequent registrations ignore
+   * the values (registry is authoritative about slot identity, not
+   * about runtime role changes).
    */
-  registerOrGet(agentId: string, now: number, kind: PrincipalKind | null = null): AgentState {
+  registerOrGet(
+    agentId: string,
+    now: number,
+    role: string | null = null,
+    authority: Authority = 'operator',
+  ): AgentState {
     const existing = this.agents.get(agentId);
     if (existing) {
       existing.agent.lastSeen = now;
@@ -61,7 +66,8 @@ export class AgentRegistry {
         connected: 0,
         createdAt: now,
         lastSeen: now,
-        kind,
+        role,
+        authority,
       },
       subscribers: new Set(),
     };
@@ -85,7 +91,8 @@ export class AgentRegistry {
         connected: state.subscribers.size,
         createdAt: state.agent.createdAt,
         lastSeen: state.agent.lastSeen,
-        kind: state.agent.kind,
+        role: state.agent.role,
+        authority: state.agent.authority,
       });
     }
     return out;

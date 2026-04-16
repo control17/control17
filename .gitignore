@@ -15,6 +15,25 @@ dist
 # Local dev server config (contains plaintext tokens — see apps/server/config.example.json)
 config.dev.json
 apps/server/config.dev.json
+# Wizard-generated dev config at the repo root (what `pnpm setup` writes)
+/control17.json
+# Self-signed certs generated alongside the root-level config
+/certs/
+
+# Web build output. `packages/web` is configured to write its `vite build`
+# straight into the server's static root so Hono's serveStatic picks it up
+# with no copy step. Everything under here is generated — hashed assets,
+# the rewritten index.html, the PWA manifest + service worker, copied
+# favicon/logo/icons. Source for all of it lives in packages/web/{src,public,index.html}.
+apps/server/public/
+
+# vite-plugin-pwa dev-mode output (disabled in vite.config.ts but the
+# plugin will still drop a dev-dist if anyone flips devOptions.enabled).
+dev-dist/
+
+# Local vite cache outside node_modules (safety net — usually it's in
+# node_modules/.vite which is already covered).
+**/.vite/
 
 # Stray local databases
 *.db
@@ -160,3 +179,7 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# tsup bundled config cache (esbuild rewrites the config with a random
+# suffix during watch-mode startup; gets stranded on crashes)
+tsup.config.bundled_*.mjs

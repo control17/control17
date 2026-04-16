@@ -9,10 +9,12 @@
  *   - Same synchronous API shape as `better-sqlite3`, so the SqliteEventLog
  *     surface is essentially a rename.
  *
- * Caveat: `node:sqlite` is still marked experimental in Node 22 LTS
- * (unflagged but labelled). We suppress the single startup warning so
- * the server's stdout stays clean — users don't need the reminder on
- * every launch.
+ * Connection ownership: this class does NOT own its DatabaseSync
+ * handle. The caller (runServer) opens one DB via `openDatabase()` and
+ * passes it to every module that needs it (event log, session store,
+ * push-subscription store). Shutdown closes the DB at the caller, not
+ * here. This is a single-connection-per-process model — `node:sqlite`
+ * doesn't like two handles on the same file.
  *
  * Schema evolution note: the `from_name` column was added alongside
  * named-token auth. Opening an older database file without the column
@@ -21,32 +23,15 @@
  * IS NULL`, which rowToMessage maps to `from: null`.
  */
 
-// Suppress the experimental warning before the first node:sqlite import.
-import './suppress-experimental-warnings.js';
-
-import { createRequire } from 'node:module';
 import {
+  clampQueryLimit,
   DEFAULT_QUERY_LIMIT,
   type EventLog,
   type EventLogQueryOptions,
   type EventLogTailOptions,
-  MAX_QUERY_LIMIT,
 } from '@control17/core';
 import type { LogLevel, Message } from '@control17/sdk/types';
-
-// esbuild (at least up to 0.27.x) strips the `node:` prefix off
-// `node:sqlite` because it treats `sqlite` as a Node built-in in its
-// hardcoded list — but there is no bare `sqlite` built-in, so the
-// emitted `import from "sqlite"` breaks at runtime. Resolve at runtime
-// via createRequire so esbuild can't touch the specifier string.
-//
-// Alias the class name for types separately from the value binding so
-// TypeScript can refer to it in type position.
-type NodeSqliteModule = typeof import('node:sqlite');
-type DatabaseSyncInstance = InstanceType<NodeSqliteModule['DatabaseSync']>;
-type StatementInstance = ReturnType<DatabaseSyncInstance['prepare']>;
-const nodeRequire = createRequire(import.meta.url);
-const { DatabaseSync } = nodeRequire('node:sqlite') as NodeSqliteModule;
+import type { DatabaseSyncInstance, StatementInstance } from './db.js';
 
 interface EventRow {
   id: string;
@@ -80,15 +65,21 @@ export class SqliteEventLog implements EventLog {
   private readonly queryFeedStmt: StatementInstance;
   private readonly queryDmStmt: StatementInstance;
 
-  constructor(path: string) {
-    this.db = new DatabaseSync(path);
-    this.db.exec('PRAGMA journal_mode = WAL');
-    this.db.exec('PRAGMA synchronous = NORMAL');
+  constructor(db: DatabaseSyncInstance) {
+    this.db = db;
     this.db.exec(CREATE_SCHEMA);
+    // Best-effort migration for databases created by an earlier version
+    // that predates the `from_name` column. The ALTER fails with
+    // "duplicate column name" on fresh DBs where CREATE_SCHEMA already
+    // defined the column — that's expected and we swallow only that
+    // specific case. Any other SQL error is a real problem and rethrows.
     try {
       this.db.exec('ALTER TABLE events ADD COLUMN from_name TEXT');
-    } catch {
-      /* already exists — normal case */
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      if (!msg.includes('duplicate column name')) {
+        throw err;
+      }
     }
     this.insertStmt = this.db.prepare(
       'INSERT INTO events (id, ts, agent_id, from_name, title, body, level, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -137,7 +128,7 @@ export class SqliteEventLog implements EventLog {
   }
 
   async query(options: EventLogQueryOptions): Promise<Message[]> {
-    const limit = Math.min(options.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
+    const limit = clampQueryLimit(options.limit);
     const before = options.before ?? Number.MAX_SAFE_INTEGER;
 
     let rows: EventRow[];
@@ -161,12 +152,33 @@ export class SqliteEventLog implements EventLog {
     return rows.map(rowToMessage);
   }
 
+  /**
+   * No-op for compatibility with the EventLog interface. The database
+   * connection is owned by the caller (see constructor doc). Kept so
+   * existing `eventLog.close()` call sites stay valid.
+   */
   async close(): Promise<void> {
-    this.db.close();
+    // intentionally empty — DB lifecycle is owned by the caller
   }
 }
 
+const VALID_LEVELS: ReadonlySet<LogLevel> = new Set<LogLevel>([
+  'debug',
+  'info',
+  'notice',
+  'warning',
+  'error',
+  'critical',
+]);
+
 function rowToMessage(row: EventRow): Message {
+  // Defensive level validation — if a stale or hand-edited DB row has
+  // a bogus level string, fall back to 'info' rather than propagating
+  // an invalid LogLevel to the wire (would fail MessageSchema downstream).
+  const level: LogLevel = VALID_LEVELS.has(row.level as LogLevel)
+    ? (row.level as LogLevel)
+    : 'info';
+
   return {
     id: row.id,
     ts: row.ts,
@@ -174,7 +186,7 @@ function rowToMessage(row: EventRow): Message {
     from: row.from_name,
     title: row.title,
     body: row.body,
-    level: row.level as LogLevel,
+    level,
     data: JSON.parse(row.data) as Record<string, unknown>,
   };
 }

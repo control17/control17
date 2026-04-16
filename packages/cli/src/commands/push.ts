@@ -4,6 +4,7 @@
 
 import type { Client } from '@control17/sdk/client';
 import type { LogLevel, PushPayload } from '@control17/sdk/types';
+import { UsageError } from './errors.js';
 
 const VALID_LEVELS: readonly LogLevel[] = [
   'debug',
@@ -23,12 +24,7 @@ export interface PushCommandInput {
   data?: Record<string, unknown>;
 }
 
-export class UsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UsageError';
-  }
-}
+export { UsageError };
 
 export function buildPushPayload(input: PushCommandInput): PushPayload {
   if (!input.body || input.body.length === 0) {

@@ -18,11 +18,23 @@ const client = new Client({
   token: process.env.C17_TOKEN!,
 });
 
+// Chat
 await client.push({
-  agentId: 'test-agent-1',
+  agentId: 'ALPHA-1',
   body: 'ci failed on main',
   level: 'warning',
 });
+
+// Objectives
+const objective = await client.createObjective({
+  assignee: 'ALPHA-1',
+  title: 'Pull main and run smoke tests',
+  outcome: 'Smoke tests green on latest main',
+});
+await client.completeObjective(objective.id, 'shipped as PR #1245');
+
+// Trace capture (assignee-only upload; commander-only read)
+const traces = await client.listObjectiveTraces(objective.id);
 ```
 
 ## Subpath exports
