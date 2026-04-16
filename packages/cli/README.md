@@ -4,7 +4,7 @@ Operator CLI for [control17](https://github.com/control17/control17),
 an MCP-based agent squadron control plane.
 
 This package provides the `c17` binary, which hosts the operator
-entry points (`c17 claude-code`, `c17 connect`, `c17 serve`, etc.)
+entry points (`c17 claude-code`, `c17 serve`, etc.)
 plus the internal `c17 mcp-bridge` verb that `.mcp.json` entries
 point at.
 
@@ -25,7 +25,6 @@ npx @control17/cli claude-code --doctor
 ```
 c17 setup       [--config-path <path>]                                 first-run wizard (squadron + slots + TOTP)
 c17 enroll      --slot <callsign> [--config-path <path>]               (re-)enroll a slot for web UI login
-c17 connect                                                            interactive TUI — join the squadron net
 c17 claude-code [--no-trace] [--doctor] [-- <claude args>...]          spawn claude wrapped in a c17 runner
 c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
 c17 roster                                                             list slots, authority, and connection state
@@ -41,11 +40,12 @@ runner:
 - Fetches `/briefing` from the broker to learn this slot's
   callsign, role, authority, teammates, and open objectives
 - Binds a Unix domain socket and starts an IPC server
-- Starts the trace host: SOCKS relay + TLS keylog tailer + per-span
-  buffer
+- Starts the trace host: a loopback HTTP CONNECT proxy that
+  terminates TLS with a per-session CA, reassembles HTTP/1.1
+  exchanges, and streams activity events to the broker in real time
 - Backs up `.mcp.json` and writes one pointing at `c17 mcp-bridge`
-- Spawns claude with `ALL_PROXY`, `SSLKEYLOGFILE`, and
-  `NODE_OPTIONS=--tls-keylog=…` merged into the environment
+- Spawns claude with `HTTPS_PROXY`, `HTTP_PROXY`, and
+  `NODE_EXTRA_CA_CERTS` pointing at the per-session CA
 - Forwards SSE channel events from the broker into the agent as
   MCP `notifications/claude/channel`
 - Restores `.mcp.json` on any exit path (normal, signal, crash)
@@ -54,9 +54,9 @@ Flags:
 
 - `--no-trace` — disable the trace subsystem entirely. Runner still
   handles SSE, objectives, and bridge IPC.
-- `--doctor` — preflight check: claude binary, tshark, `$TMPDIR`,
-  SOCKS bindability. Exits 0 on pass, 1 on any FAIL (WARN doesn't
-  fail the exit code).
+- `--doctor` — preflight check: claude binary, `$TMPDIR` writable,
+  loopback bind, per-session CA generation. Exits 0 on pass, 1 on
+  any FAIL (WARN doesn't fail the exit code).
 - Everything after `--` is forwarded verbatim to the `claude`
   binary.
 
@@ -82,7 +82,7 @@ operators never invoke it directly.
 | Variable | Purpose |
 |---|---|
 | `C17_URL` | Broker base URL (default `http://127.0.0.1:8717`) |
-| `C17_TOKEN` | Slot bearer token — required for `claude-code`, `connect`, `push`, `roster`, `objectives` |
+| `C17_TOKEN` | Slot bearer token — required for `claude-code`, `push`, `roster`, `objectives` |
 | `CLAUDE_PATH` | Override the claude binary path (otherwise `which claude`) |
 | `C17_RUNNER_SOCKET` | Set by the runner on the bridge's env; operators never set this |
 

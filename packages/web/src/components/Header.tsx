@@ -2,8 +2,7 @@
  * Header bar — identity + connection status + logout.
  *
  * Shows: plane · CALLSIGN · role · team · ◈ ON NET / ◇ OFF NET
- * Mirrors the TUI header so operators moving between surfaces see
- * the same summary in the same order. The plane silhouette is the
+ * The plane silhouette is the
  * control17 brand mark (also the favicon + PWA icon), inlined so the
  * `currentColor` fill inherits from the surrounding text color.
  */

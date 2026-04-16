@@ -10,7 +10,7 @@
  *   - cap at 99+
  *
  * The auto-read effect in Shell is covered implicitly by the
- * Sidebar tests: each test manually sets `currentView` + `lastRead`
+ * Sidebar tests: each test manually sets `view` + `lastRead`
  * to simulate the state the Shell effect would produce, and asserts
  * the rendered DOM.
  */
@@ -29,7 +29,7 @@ import {
   markThreadRead,
   unreadCount,
 } from '../src/lib/unread.js';
-import { __resetViewForTests, currentView } from '../src/lib/view.js';
+import { __resetViewForTests, view } from '../src/lib/view.js';
 
 function mkMsg(overrides: Partial<Message> = {}): Message {
   return {
@@ -177,7 +177,7 @@ describe('<Sidebar /> unread indicators', () => {
     lastReadByThread.value = new Map([['primary', 5]]);
     // Navigate away from primary so the "active thread suppresses
     // its own badge" rule doesn't hide the pill we're testing for.
-    currentView.value = { kind: 'overview' };
+    view.value = { kind: 'overview' };
     render(<Sidebar viewer="me" />);
     expect(screen.getByText('1')).toBeTruthy();
   });
@@ -190,7 +190,7 @@ describe('<Sidebar /> unread indicators', () => {
     ]);
     lastReadByThread.value = new Map([['dm:build-bot', 0]]);
     // Make sure we're NOT viewing that thread (otherwise auto-active suppresses it).
-    currentView.value = { kind: 'thread', key: 'primary' };
+    view.value = { kind: 'thread', key: 'primary' };
     render(<Sidebar viewer="me" />);
     expect(screen.getByText('2')).toBeTruthy();
   });
@@ -202,7 +202,7 @@ describe('<Sidebar /> unread indicators', () => {
     // Pretend the user is actively on the DM — the Shell's auto-read
     // effect would normally have bumped lastRead already. The
     // sidebar's "badge only when !active" branch suppresses the pill.
-    currentView.value = { kind: 'thread', key: 'dm:build-bot' };
+    view.value = { kind: 'thread', key: 'dm:build-bot' };
     render(<Sidebar viewer="me" />);
     // Badge absent even though the raw unread count would be > 0 if
     // lastRead hadn't been bumped.
@@ -213,7 +213,7 @@ describe('<Sidebar /> unread indicators', () => {
     setRoster();
     appendMessages('me', [mkMsg({ id: 'a', ts: 10, agentId: 'me', from: 'build-bot' })]);
     lastReadByThread.value = new Map([['dm:build-bot', 0]]);
-    currentView.value = { kind: 'thread', key: 'primary' };
+    view.value = { kind: 'thread', key: 'primary' };
     render(<Sidebar viewer="me" />);
     const label = screen.getByText('build-bot');
     expect(label.className).toMatch(/\bfont-semibold\b/);
@@ -223,7 +223,7 @@ describe('<Sidebar /> unread indicators', () => {
     setRoster();
     appendMessages('me', [mkMsg({ id: 'a', ts: 10, agentId: null, from: 'me' })]);
     lastReadByThread.value = new Map([['primary', 0]]);
-    currentView.value = { kind: 'overview' };
+    view.value = { kind: 'overview' };
     render(<Sidebar viewer="me" />);
     expect(screen.queryByText('1')).toBeNull();
   });
@@ -240,7 +240,7 @@ describe('<Sidebar /> unread indicators', () => {
     );
     appendMessages('me', bunch);
     lastReadByThread.value = new Map([['primary', 0]]);
-    currentView.value = { kind: 'overview' };
+    view.value = { kind: 'overview' };
     render(<Sidebar viewer="me" />);
     expect(screen.getByText('99+')).toBeTruthy();
     expect(screen.queryByText('105')).toBeNull();

@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: Runner spawns agent. Bridge relays stdio. Broker persists. SOCKS + keylog capture LLM traces per objective.
+description: Runner spawns agent behind a MITM TLS proxy. Bridge relays stdio. Broker persists. Trace capture is transparent to upstreams.
 section: Docs
 order: 20
 ---
@@ -18,9 +18,9 @@ The most important architectural decision is the process tree:
           │
           ▼
    c17 claude-code        ◀── RUNNER: broker client, SSE, objectives,
-   (long-lived)               trace host (SOCKS + keylog + buffer)
+   (long-lived)               trace host (MITM proxy + local CA)
           │
-          ▼ spawns with ALL_PROXY / SSLKEYLOGFILE / NODE_OPTIONS
+          ▼ spawns with HTTPS_PROXY / NODE_EXTRA_CA_CERTS / C17_RUNNER_SOCKET
    claude (CLI)           ◀── AGENT: does the work
           │
           ▼ stdio MCP per .mcp.json
@@ -31,11 +31,11 @@ The most important architectural decision is the process tree:
 ```
 
 The runner runs **upstream** of the agent process. That upstream
-position is what lets us bake env vars into the child, run a SOCKS
-relay the agent's HTTPS traffic flows through, tail the TLS keylog,
-and attribute captured bytes to the objective the agent is working
-on. None of that is possible when the MCP server is a child of the
-agent.
+position is what lets us bake env vars into the child, intercept
+outbound HTTPS via a loopback MITM proxy, terminate both legs of
+every TLS flow so we can observe plaintext, and attribute captured
+bytes to the objective the agent is working on. None of that is
+possible when the MCP server is a child of the agent.
 
 ## Two auth planes, one identity
 
@@ -53,38 +53,54 @@ agent.
                       ╚════════════╝
 ```
 
-Both planes pass through the same auth middleware and resolve to the
-same slot. What gates access downstream is the slot's **authority**:
-`commander | lieutenant | operator`. Commanders have full power;
-lieutenants can create and cancel objectives they originated;
-operators execute assigned work.
+Both planes pass through the same auth middleware and resolve to
+the same slot. What gates access downstream is the slot's
+**authority**: `commander | lieutenant | operator`. Commanders
+have full power; lieutenants can create and cancel objectives
+they originated; operators execute assigned work.
 
 ## Objectives and trace capture
 
-Objectives are the structured work primitive: push-assigned, single
-assignee, outcome-required, four-state (`active → blocked → done |
-cancelled`). Each gets its own discussion thread at `obj:<id>` and
-an append-only audit log.
+Objectives are the structured work primitive: push-assigned,
+single-assignee, outcome-required, four-state (`active → blocked
+→ done | cancelled`). Each gets its own discussion thread at
+`obj:<id>` and an append-only audit log.
 
-When an objective becomes active on a slot, the runner opens a trace
-**span** and starts attributing captured bytes to it. When the
-objective terminates, the runner closes the span, feeds the bytes +
-keys through `tshark -T json` to decrypt the TLS, extracts
-Anthropic API shapes (model, messages, tool_use, tool_result,
-usage), redacts secrets, and uploads the structured entries to
-`POST /objectives/:id/traces` (assignee-only).
+The runner maintains an append-only **agent activity stream**
+per slot. The loopback HTTP CONNECT proxy (which the agent
+reaches via `HTTPS_PROXY`) terminates TLS on both legs: it dials
+the real upstream as a standard TLS client with real cert
+validation, and terminates TLS toward the agent with a leaf cert
+issued on-demand from a per-session local CA (which the agent
+trusts via `NODE_EXTRA_CA_CERTS`). Between the two TLS sessions
+lives plaintext — reassembled live into HTTP/1.1 exchanges,
+parsed, secret-redacted, and streamed to the broker as activity
+events.
 
-Commanders review uploaded traces via the web UI's TracePanel,
-gated by `GET /objectives/:id/traces` returning 403 to anyone below
-commander.
+Objective "traces" are a **time-range view** over this stream.
+When an objective becomes active, the runner appends an
+`objective_open` event; on terminal transition it appends an
+`objective_close` event. Commanders review traces via the web
+UI's TracePanel, which queries `GET /agents/<assignee>/activity`
+bounded by the objective's `createdAt` / `completedAt` — gated
+to commanders only at the server.
+
+The MITM is **transparent to the upstream**: from Anthropic's
+point of view, we are a normal TLS client doing standard SNI +
+cert validation + application data. OAuth, token refreshes,
+streaming responses, SSE — all work identically.
+
+Zero external tools. No tshark. No pcap. No SSLKEYLOGFILE. The
+entire decoder is pure Node + a small amount of `node-forge`
+for CA cert signing.
 
 ## Wire compatibility
 
 The OSS broker and any future hosted platform speak the same
 protocol. Point `C17_URL` at `localhost:8717` or
 `api.control17.com` — the same `c17 claude-code` runner keeps
-working. This is structural, not a convenience: the protocol is a
-versioned zod-validated boundary (`X-C17-Protocol: 1`).
+working. This is structural, not a convenience: the protocol is
+a versioned zod-validated boundary (`X-C17-Protocol: 1`).
 
 ## What lives where
 
@@ -94,15 +110,16 @@ versioned zod-validated boundary (`X-C17-Protocol: 1`).
 - **runner** (`c17 claude-code`) — the operator's entry point.
   Owns the broker client, SSE subscription, objectives tracker,
   trace host, and IPC server the bridge connects to
-- **bridge** (`c17 mcp-bridge`, hidden verb) — thin stdio MCP relay.
-  No state; everything goes back to the runner over UDS
-- **sdk** (`@control17/sdk`) — TypeScript wire contract shared by
-  everything
-- **web** (`@control17/web`) — Preact + Vite + UnoCSS SPA. Commander
-  dashboard, objectives, commander-only TracePanel, Web Push
-- **cli** (`@control17/cli`) — `c17 claude-code`, `c17 connect`,
-  `c17 objectives`, `c17 push`, `c17 roster`, `c17 serve`
+- **bridge** (`c17 mcp-bridge`, hidden verb) — thin stdio MCP
+  relay. No state; everything goes back to the runner over UDS
+- **sdk** (`@control17/sdk`) — TypeScript wire contract shared
+  by everything
+- **web** (`@control17/web`) — Preact + Vite + UnoCSS SPA.
+  Commander dashboard, objectives, commander-only TracePanel,
+  Web Push
+- **cli** (`@control17/cli`) — `c17 claude-code`, `c17 objectives`,
+  `c17 push`, `c17 roster`, `c17 serve`
 
-For the full walkthrough (diagrams, IPC protocol, decrypt pipeline,
-identity model, objective lifecycle), see
+For the full walkthrough (diagrams, IPC protocol, MITM proxy
+details, identity model, objective lifecycle), see
 [architecture.md](./architecture.md).

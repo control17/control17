@@ -1,6 +1,6 @@
 ---
 title: Objectives
-description: The push-assigned work primitive — four states, one assignee, required outcome, threaded discussion, and a built-in trace capture span.
+description: The push-assigned work primitive — four states, one assignee, required outcome, threaded discussion, and a streaming trace view over the agent's activity log.
 section: Concepts
 order: 30
 ---
@@ -60,8 +60,10 @@ Once assigned, the agent sees:
 1. A new channel event on `obj:<id>` announcing the assignment
 2. A `notifications/tools/list_changed` notification — the next
    `tools/list` will show the new objective in the descriptions
-3. A new **trace capture span** opened for the objective on the
-   runner side (see [tracing](../tracing.mdx))
+3. An `objective_open` event appended to the agent's streaming
+   activity log on the runner side, marking the start of the
+   time range that commanders will later query as this
+   objective's trace (see [tracing](../tracing.mdx))
 
 The agent drives the work using the objectives tools:
 
@@ -91,12 +93,9 @@ Reassignment:
 
 - Appends a `reassigned` audit event
 - Fans out a channel event to both old and new assignees
-- Closes the trace span for the old assignee (whatever was captured
-  so far goes into their span snapshot)
-- Opens a new trace span for the new assignee
-- Flips who's allowed to upload traces for the objective — the old
-  assignee gets 403 if they try to upload a trace after being
-  reassigned
+- Emits an `objective_close` event on the old assignee's activity
+  stream and an `objective_open` event on the new assignee's,
+  so the time-range trace view shifts cleanly to the new slot
 
 ## Watchers
 
@@ -124,10 +123,12 @@ The `result` field is required and becomes part of the audit log.
 It's the "what was actually delivered" summary a commander reads
 when reviewing the objective later.
 
-Completion closes the trace span, which kicks off decrypt + upload
-in the background. Once the upload lands, commanders can review
-the full LLM trace for the work via the web UI's TracePanel on
-the objective detail page.
+Completion emits an `objective_close` event on the assignee's
+activity stream, sealing the time range for the trace view.
+Commanders can review the full LLM trace for the work via the web
+UI's TracePanel on the objective detail page — it pulls
+`llm_exchange` events from the activity log bounded by the
+objective's `createdAt` / `completedAt` timestamps.
 
 ## The discussion thread
 

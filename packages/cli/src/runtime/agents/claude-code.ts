@@ -124,8 +124,8 @@ export interface PrepareMcpConfigOptions {
   bridgeArgs?: string[];
   /**
    * Additional env vars to inject into the `control17` mcp-server
-   * entry. Trace-host variables (`ALL_PROXY`, `SSLKEYLOGFILE`,
-   * `NODE_OPTIONS`) land here when tracing is enabled — Phase 5.
+   * entry. Trace-host variables (`HTTPS_PROXY`, `HTTP_PROXY`,
+   * `NODE_EXTRA_CA_CERTS`, etc.) land here when tracing is enabled.
    */
   extraEnv?: Record<string, string>;
 }

@@ -42,13 +42,9 @@ import {
   prepareMcpConfig,
 } from '../runtime/agents/claude-code.js';
 import { type RunnerHandle, RunnerStartupError, startRunner } from '../runtime/runner.js';
+import { UsageError } from './errors.js';
 
-export class UsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UsageError';
-  }
-}
+export { UsageError };
 
 export interface ClaudeCodeCommandInput {
   url?: string;
@@ -162,7 +158,11 @@ export async function runClaudeCodeCommand(input: ClaudeCodeCommandInput): Promi
       bridgeArgs: detectedBridgeArgs,
     });
   } catch (err) {
-    await runner.shutdown('mcp-config-failed').catch(() => {});
+    await runner.shutdown('mcp-config-failed').catch((shutdownErr) => {
+      log('claude-code: runner shutdown failed during mcp-config cleanup', {
+        error: shutdownErr instanceof Error ? shutdownErr.message : String(shutdownErr),
+      });
+    });
     if (err instanceof ClaudeCodeAdapterError) {
       throw new UsageError(err.message);
     }
@@ -204,7 +204,8 @@ export async function runClaudeCodeCommand(input: ClaudeCodeCommandInput): Promi
     }
     log('claude-code: trace host armed', {
       proxy: runner.traceHost.proxy.proxyUrl,
-      keylog: runner.traceHost.keylogPath,
+      caCert: runner.traceHost.caCertPath,
+      warning: 'NODE_TLS_REJECT_UNAUTHORIZED=0 is set on the child — loopback only',
     });
   }
 

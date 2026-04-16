@@ -2,35 +2,32 @@
  * `c17` — operator CLI for control17.
  *
  * Subcommands:
- *   c17 setup   — first-run wizard: create team config + enroll TOTP
- *   c17 enroll  — (re-)enroll a slot for web UI login (TOTP)
- *   c17 connect — interactive TUI for the team net
- *   c17 push    — push an event to a teammate or broadcast
- *   c17 roster  — list slots and connection state
- *   c17 serve   — run a local broker (optional peer: @control17/server)
+ *   c17 setup       — first-run wizard: create team config + enroll TOTP
+ *   c17 enroll      — (re-)enroll a slot for web UI login (TOTP)
+ *   c17 claude-code — spawn claude-code wrapped in a c17 runner
+ *   c17 push        — push an event to a teammate or broadcast
+ *   c17 roster      — list slots and connection state
+ *   c17 objectives  — list / view / mutate squadron objectives
+ *   c17 serve       — run a local broker (optional peer: @control17/server)
+ *
+ * The internal `c17 mcp-bridge` verb is hidden from the top-level
+ * help; agents spawn it via `.mcp.json` and it connects back to the
+ * runner over UDS.
  *
  * Global env vars (defaults):
  *   C17_URL       = http://127.0.0.1:8717
- *   C17_TOKEN     (required for connect/push/roster)
- *
- * Note: the former `c17 link` verb has been retired as part of the
- * runner/bridge refactor. The runner is being rebuilt in subsequent
- * phases as `c17 claude-code` (and other agent-framework verbs), with
- * `c17 mcp-bridge` as a thin internal relay that agents spawn via
- * `.mcp.json`. See `/home/aprzy/.claude/plans/runner-bridge-trace.md`.
+ *   C17_TOKEN     (required for claude-code / push / roster / objectives)
  */
 
 import { Client } from '@control17/sdk/client';
 import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 import { parseDataFlag, parseSubcommandArgs } from './args.js';
-import {
-  UsageError as ClaudeCodeUsageError,
-  runClaudeCodeCommand,
-} from './commands/claude-code.js';
+import { runClaudeCodeCommand } from './commands/claude-code.js';
 import { formatReport, runDoctor } from './commands/doctor.js';
 import { runEnrollCommand } from './commands/enroll.js';
+import { UsageError } from './commands/errors.js';
 import { runObjectivesCommand } from './commands/objectives.js';
-import { type PushCommandInput, runPushCommand, UsageError } from './commands/push.js';
+import { type PushCommandInput, runPushCommand } from './commands/push.js';
 import { runRosterCommand } from './commands/roster.js';
 import { runServeCommand } from './commands/serve.js';
 import { runSetupCommand } from './commands/setup.js';
@@ -41,7 +38,6 @@ const USAGE = `control17 cli v${CLI_VERSION}
 usage:
   c17 setup       [--config-path <path>]            first-run wizard (squadron + slots + TOTP)
   c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
-  c17 connect                       interactive TUI — join the squadron net
   c17 claude-code [--no-trace] [--doctor] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
   c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
   c17 roster                        list slots, authority, and connection state
@@ -104,9 +100,6 @@ async function main(): Promise<void> {
     case 'enroll':
       await handleEnroll(rest);
       return;
-    case 'connect':
-      await handleConnect(rest);
-      return;
     case 'push':
       await handlePush(rest);
       return;
@@ -150,9 +143,7 @@ async function handleSetup(args: string[]): Promise<void> {
       (line) => log(line),
     );
   } catch (err) {
-    if (err instanceof (await import('./commands/setup.js')).UsageError) {
-      fail(err.message, 2);
-    }
+    if (err instanceof UsageError) fail(err.message, 2);
     fail(err instanceof Error ? err.message : String(err));
   }
 }
@@ -178,37 +169,7 @@ async function handleEnroll(args: string[]): Promise<void> {
       (line) => log(line),
     );
   } catch (err) {
-    if (err instanceof (await import('./commands/enroll.js')).UsageError) {
-      fail(err.message, 2);
-    }
-    fail(err instanceof Error ? err.message : String(err));
-  }
-}
-
-async function handleConnect(args: string[]): Promise<void> {
-  const { values } = parseSubcommandArgs(args, {
-    url: { type: 'string' },
-    token: { type: 'string' },
-    help: { type: 'boolean', short: 'h' },
-  });
-  if (values.help === true) {
-    process.stdout.write(USAGE);
-    return;
-  }
-  const url =
-    getString(values, 'url') ?? process.env[ENV.url] ?? `http://127.0.0.1:${DEFAULT_PORT}`;
-  const token = getString(values, 'token') ?? process.env[ENV.token];
-  if (!token) {
-    fail(`connect: --token or ${ENV.token} is required`);
-  }
-
-  try {
-    const { runConnectCommand } = await import('./commands/connect.js');
-    await runConnectCommand({ url, token });
-  } catch (err) {
-    if (err instanceof (await import('./commands/connect.js')).UsageError) {
-      fail(err.message, 2);
-    }
+    if (err instanceof UsageError) fail(err.message, 2);
     fail(err instanceof Error ? err.message : String(err));
   }
 }
@@ -310,9 +271,7 @@ async function handleServe(args: string[]): Promise<void> {
       (line) => log(line),
     );
   } catch (err) {
-    if (err instanceof (await import('./commands/serve.js')).UsageError) {
-      fail(err.message, 2);
-    }
+    if (err instanceof UsageError) fail(err.message, 2);
     fail(err instanceof Error ? err.message : String(err));
   }
 
@@ -430,9 +389,7 @@ async function handleClaudeCode(args: string[]): Promise<void> {
     const code = await runClaudeCodeCommand({ url, token, claudeArgs, noTrace });
     process.exit(code);
   } catch (err) {
-    if (err instanceof ClaudeCodeUsageError) {
-      fail(err.message, 2);
-    }
+    if (err instanceof UsageError) fail(err.message, 2);
     fail(err instanceof Error ? err.message : String(err));
   }
 }

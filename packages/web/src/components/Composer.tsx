@@ -16,7 +16,7 @@ import { signal } from '@preact/signals';
 import type { JSX } from 'preact';
 import { getClient } from '../lib/client.js';
 import { PRIMARY_THREAD } from '../lib/messages.js';
-import { currentView } from '../lib/view.js';
+import { view } from '../lib/view.js';
 
 const draft = signal('');
 const sending = signal(false);
@@ -34,10 +34,10 @@ export interface ComposerProps {
 }
 
 export function Composer({ viewer }: ComposerProps) {
-  const view = currentView.value;
-  if (view.kind !== 'thread') return null;
+  const v = view.value;
+  if (v.kind !== 'thread') return null;
 
-  const threadKey = view.key;
+  const threadKey = v.key;
 
   const send = async () => {
     const body = draft.value.trim();

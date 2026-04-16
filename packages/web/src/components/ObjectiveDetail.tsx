@@ -37,7 +37,7 @@ import {
   updateObjectiveWatchers,
 } from '../lib/objectives.js';
 import { roster } from '../lib/roster.js';
-import { selectObjectivesList } from '../lib/view.js';
+import { selectAgentDetail, selectObjectivesList } from '../lib/view.js';
 import { MessageLine } from './MessageLine.js';
 import { TracePanel } from './TracePanel.js';
 
@@ -177,9 +177,8 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
         </div>
         <h1 class="c17-panel-title !text-2xl mt-2">{current.title}</h1>
         <div class="text-sm text-brand-muted mt-2 font-medium">
-          assignee: <span class="text-brand-primary-bright font-semibold">{current.assignee}</span>{' '}
-          · originator:{' '}
-          <span class="text-brand-primary-bright font-semibold">{current.originator}</span>
+          assignee: <CallsignRef callsign={current.assignee} isCommander={isCommander} /> ·
+          originator: <CallsignRef callsign={current.originator} isCommander={isCommander} />
         </div>
       </div>
 
@@ -372,7 +371,7 @@ export function ObjectiveDetail({ id, viewer }: ObjectiveDetailProps) {
       <DiscussionThread id={id} viewer={viewer} canPost={canDiscuss} terminal={isTerminal} />
 
       {/* ── Captured LLM traces (commander-only) ── */}
-      {isCommander && <TracePanel objectiveId={id} />}
+      {isCommander && <TracePanel objective={current} />}
 
       {/* ── Lifecycle event log ── */}
       <section class="border-t border-brand-border-subtle pt-5">
@@ -630,6 +629,26 @@ function BackButton() {
       class="c17-label text-brand-subtle hover:text-brand-text mb-3"
     >
       ← Back to objectives
+    </button>
+  );
+}
+
+/**
+ * Render a callsign inline — as a plain span for non-commanders,
+ * or as a button that navigates to the agent detail page for
+ * commanders.
+ */
+function CallsignRef({ callsign, isCommander }: { callsign: string; isCommander: boolean }) {
+  if (!isCommander) {
+    return <span class="text-brand-primary-bright font-semibold">{callsign}</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => selectAgentDetail(callsign)}
+      class="text-brand-primary-bright font-semibold hover:underline underline-offset-2"
+    >
+      {callsign}
     </button>
   );
 }

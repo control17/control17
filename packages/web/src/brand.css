@@ -235,7 +235,7 @@ pre {
 }
 
 /*
- * Status indicator — aligned glyph + label pair, as used in the TUI header.
+ * Status indicator — aligned glyph + label pair, as used in the header.
  *
  *   <span class="c17-status c17-status-ok">● ON NET</span>
  *   <span class="c17-status c17-status-warn">◆ STANDBY</span>

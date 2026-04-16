@@ -203,14 +203,14 @@ export const ListObjectivesQuerySchema = z.object({
   status: ObjectiveStatusSchema.optional(),
 });
 
-// ───────────────────────── Objective traces ───────────────────
+// ───────────────────────── Trace entries ─────────────────────
 //
-// Trace entries arrive from the runner after a span's TLS has been
-// decrypted by tshark. We keep the schema permissive here because the
-// shape is genuinely open-ended — Anthropic's API evolves, and
-// opaque HTTP records can carry anything. The server stores the
-// entries as a single JSON blob; the web UI walks them with its own
-// (looser) renderer.
+// Trace entries are produced by the runner's MITM proxy as
+// captured HTTP/1.1 exchanges. They flow through the agent
+// activity stream (below) rather than a per-objective table.
+// Schemas stay permissive because Anthropic's API shape evolves
+// and opaque HTTP records can carry anything. The server stores
+// them as JSON; the web UI walks them with its own renderer.
 
 const AnthropicContentBlockSchema = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -287,27 +287,106 @@ export const TraceEntrySchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
-export const ObjectiveTraceSchema = z.object({
+// Pull out the two concrete entry variants so activity events
+// can reference them directly (an LLM exchange carries an
+// AnthropicMessagesEntry; an opaque HTTP event carries an
+// OpaqueHttpEntry).
+const AnthropicMessagesEntrySchema = z.object({
+  kind: z.literal('anthropic_messages'),
+  startedAt: z.number().int().nonnegative(),
+  endedAt: z.number().int().nonnegative(),
+  request: z.object({
+    model: z.string().nullable(),
+    maxTokens: z.number().nullable(),
+    temperature: z.number().nullable(),
+    system: z.string().nullable(),
+    messages: z.array(AnthropicMessageSchema),
+    tools: z.array(AnthropicToolSchema).nullable(),
+  }),
+  response: z
+    .object({
+      stopReason: z.string().nullable(),
+      stopSequence: z.string().nullable(),
+      messages: z.array(AnthropicMessageSchema),
+      usage: AnthropicUsageSchema.nullable(),
+      status: z.number().nullable(),
+    })
+    .nullable(),
+});
+
+const OpaqueHttpEntrySchema = z.object({
+  kind: z.literal('opaque_http'),
+  startedAt: z.number().int().nonnegative(),
+  endedAt: z.number().int().nonnegative(),
+  host: z.string(),
+  method: z.string(),
+  url: z.string(),
+  status: z.number().nullable(),
+  requestHeaders: z.record(z.string(), z.string()),
+  responseHeaders: z.record(z.string(), z.string()),
+  requestBodyPreview: z.string().nullable(),
+  responseBodyPreview: z.string().nullable(),
+});
+
+// ───────────────────────── Agent activity stream ──────────────
+
+export const AgentActivityKindSchema = z.enum([
+  'objective_open',
+  'objective_close',
+  'llm_exchange',
+  'opaque_http',
+]);
+
+export const AgentActivityEventSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('objective_open'),
+    ts: z.number().int().nonnegative(),
+    objectiveId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('objective_close'),
+    ts: z.number().int().nonnegative(),
+    objectiveId: z.string().min(1),
+    result: z.enum(['done', 'cancelled', 'reassigned', 'runner_shutdown']),
+  }),
+  z.object({
+    kind: z.literal('llm_exchange'),
+    ts: z.number().int().nonnegative(),
+    duration: z.number().int().nonnegative(),
+    entry: AnthropicMessagesEntrySchema,
+  }),
+  z.object({
+    kind: z.literal('opaque_http'),
+    ts: z.number().int().nonnegative(),
+    duration: z.number().int().nonnegative(),
+    entry: OpaqueHttpEntrySchema,
+  }),
+]);
+
+export const AgentActivityRowSchema = z.object({
   id: z.number().int().nonnegative(),
-  objectiveId: z.string().min(1),
-  spanStart: z.number().int().nonnegative(),
-  spanEnd: z.number().int().nonnegative(),
-  provider: z.string(),
-  entries: z.array(TraceEntrySchema),
-  truncated: z.boolean(),
+  slotCallsign: CallsignSchema,
+  event: AgentActivityEventSchema,
   createdAt: z.number().int().nonnegative(),
 });
 
-export const UploadObjectiveTraceRequestSchema = z.object({
-  spanStart: z.number().int().nonnegative(),
-  spanEnd: z.number().int().nonnegative(),
-  provider: z.string().min(1).max(64),
-  entries: z.array(TraceEntrySchema).max(10_000),
-  truncated: z.boolean(),
+export const UploadAgentActivityRequestSchema = z.object({
+  events: z.array(AgentActivityEventSchema).min(1).max(500),
 });
 
-export const ListObjectiveTracesResponseSchema = z.object({
-  traces: z.array(ObjectiveTraceSchema),
+export const UploadAgentActivityResponseSchema = z.object({
+  accepted: z.number().int().nonnegative(),
+});
+
+export const ListAgentActivityResponseSchema = z.object({
+  activity: z.array(AgentActivityRowSchema),
+});
+
+export const ListAgentActivityQuerySchema = z.object({
+  from: z.number().int().nonnegative().optional(),
+  to: z.number().int().nonnegative().optional(),
+  kind: z.union([AgentActivityKindSchema, z.array(AgentActivityKindSchema)]).optional(),
+  limit: z.number().int().positive().max(1000).optional(),
 });
 
 // ───────────────────────── Briefing + session ─────────────────

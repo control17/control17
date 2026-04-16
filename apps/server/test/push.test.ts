@@ -371,7 +371,7 @@ describe('push HTTP endpoints', () => {
       roles: ROLES,
       version: '0.0.0',
       logger: noopLogger(),
-      ...(withPush ? { pushStore, vapidPublicKey: 'BK' + 'A'.repeat(85) } : {}),
+      ...(withPush ? { pushStore, vapidPublicKey: `BK${'A'.repeat(85)}` } : {}),
     });
     return { app, pushStore, slots };
   }

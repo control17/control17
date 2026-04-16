@@ -24,6 +24,7 @@
 
 import { effect } from '@preact/signals';
 import { useEffect } from 'preact/hooks';
+import { AgentPage } from '../components/AgentPage.js';
 import { Composer } from '../components/Composer.js';
 import { Header } from '../components/Header.js';
 import { ObjectiveCreate } from '../components/ObjectiveCreate.js';
@@ -41,11 +42,11 @@ import { loadRoster, startRosterPolling } from '../lib/roster.js';
 import { logout, session } from '../lib/session.js';
 import { startSubscribe, streamConnected } from '../lib/sse.js';
 import { initializeLastReadFromStore, markThreadRead } from '../lib/unread.js';
-import { currentView } from '../lib/view.js';
+import { type View, view } from '../lib/view.js';
 
 export function Shell() {
   const s = session.value;
-  const view = currentView.value;
+  const v = view.value;
 
   useEffect(() => {
     if (s.status !== 'authenticated') return;
@@ -116,13 +117,13 @@ export function Shell() {
       // @preact/signals — reads both signals in its body and
       // re-runs whenever either changes.
       disposeAutoRead = effect(() => {
-        const view = currentView.value;
+        const v = view.value;
         const map = messagesByThread.value;
-        if (view.kind !== 'thread') return;
-        const messages = map.get(view.key) ?? [];
+        if (v.kind !== 'thread') return;
+        const messages = map.get(v.key) ?? [];
         if (messages.length === 0) return;
         const latest = messages[messages.length - 1];
-        if (latest) markThreadRead(view.key, latest.ts);
+        if (latest) markThreadRead(v.key, latest.ts);
       });
 
       // Presence-freshness hook: every time our own SSE stream goes
@@ -173,7 +174,7 @@ export function Shell() {
       <Header />
       <div class="flex flex-1 min-h-0">
         <Sidebar viewer={s.slot} />
-        <section class="flex-1 flex flex-col min-w-0">{renderView(view, s.slot)}</section>
+        <section class="flex-1 flex flex-col min-w-0">{renderView(v, s.slot)}</section>
       </div>
     </main>
   );
@@ -184,8 +185,8 @@ export function Shell() {
  * Transcript + Composer; everything else renders a standalone panel
  * in the same flex region.
  */
-function renderView(view: ReturnType<(typeof currentView)['peek']>, viewer: string) {
-  switch (view.kind) {
+function renderView(v: View, viewer: string) {
+  switch (v.kind) {
     case 'thread':
       return (
         <>
@@ -198,9 +199,11 @@ function renderView(view: ReturnType<(typeof currentView)['peek']>, viewer: stri
     case 'objectives-list':
       return <ObjectivesPanel viewer={viewer} />;
     case 'objective-detail':
-      return <ObjectiveDetail id={view.id} viewer={viewer} />;
+      return <ObjectiveDetail id={v.id} viewer={viewer} />;
     case 'objective-create':
       return <ObjectiveCreate />;
+    case 'agent-detail':
+      return <AgentPage callsign={v.callsign} viewer={viewer} />;
   }
 }
 

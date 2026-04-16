@@ -20,14 +20,14 @@ assigned and a trace captured.
 - **Node.js 22+** and **pnpm 10+**
 - **Claude Code** installed and on `PATH` (or pointed to via
   `$CLAUDE_PATH`)
-- **tshark** *(optional but recommended)* — required for trace
-  decryption. Install with `apt install tshark` (Debian/Ubuntu) or
-  `brew install wireshark` (macOS). Without it, trace capture still
-  works but traces land with `status: 'tshark_missing'`.
 
-Run `c17 claude-code --doctor` at any point to preflight-check all
-of the above plus `$TMPDIR` writability and SOCKS loopback
-bindability.
+That's it — no tshark, no external decryption tools. Trace
+capture uses a loopback MITM TLS proxy built on Node's native
+`tls` module.
+
+Run `c17 claude-code --doctor` at any point to preflight-check
+the claude binary, `$TMPDIR`, loopback proxy bindability, and
+the local trace CA generation pipeline.
 
 ## 1. Install
 
@@ -102,14 +102,15 @@ c17 claude-code
 
 Behind the scenes:
 
-1. The runner calls `GET /briefing` against the broker to learn its
-   callsign, role, authority, teammates, and open objectives.
+1. The runner calls `GET /briefing` against the broker to learn
+   its callsign, role, authority, teammates, and open objectives.
 2. It binds a Unix domain socket for IPC.
-3. It starts the **trace host**: a SOCKS5 relay on
-   `127.0.0.1:<random>`, a TLS keylog tailer at `$TMPDIR/c17-keylog-*`,
-   and a per-span ring buffer.
-4. It **backs up** your existing `.mcp.json` (if any) to a tmp dir
-   and writes a new one containing a `control17` entry pointing at
+3. It starts the **trace host**: generates a fresh per-session
+   local CA, writes the CA cert PEM to `$TMPDIR/c17-trace-ca-*`,
+   and starts a loopback HTTP CONNECT proxy with MITM TLS
+   termination on a random ephemeral port.
+4. It **backs up** your existing `.mcp.json` (if any) to a tmp
+   dir and writes a new one containing a `c17` entry pointing at
    `c17 mcp-bridge` with `C17_RUNNER_SOCKET` set to the IPC path.
 5. It spawns `claude` with inherited stdio and these env vars
    merged in:
@@ -118,18 +119,20 @@ Behind the scenes:
    HTTPS_PROXY=http://127.0.0.1:<port>
    HTTP_PROXY=http://127.0.0.1:<port>
    ALL_PROXY=http://127.0.0.1:<port>
+   NO_PROXY=localhost,127.0.0.1,::1
    NODE_USE_ENV_PROXY=1
-   SSLKEYLOGFILE=<keylog path>
-   NODE_OPTIONS=<existing value> --tls-keylog=<keylog path>
+   NODE_EXTRA_CA_CERTS=<CA cert path>
+   NODE_TLS_REJECT_UNAUTHORIZED=0
    ```
 
 6. When claude exits (or you Ctrl+C), the runner restores your
    `.mcp.json` to its pre-run state on every exit path (normal,
-   SIGINT, SIGTERM, crash).
+   SIGINT, SIGTERM, crash), closes the proxy, and deletes the
+   CA cert PEM.
 
-Pass `--no-trace` to skip the SOCKS relay + keylog setup entirely —
-useful when you're just testing the runner/bridge plumbing without
-wanting the overhead.
+Pass `--no-trace` to skip the proxy + CA setup entirely — useful
+when you're debugging the runner/bridge plumbing without wanting
+extra moving parts.
 
 ## 5. Push your first objective
 
@@ -167,13 +170,15 @@ trace records with:
   blocks
 - Secrets redacted to `[REDACTED]` where they appeared
 
-If the traces are missing or show `no_records`, your span didn't
-capture any Anthropic API traffic — usually because `ALL_PROXY`
-wasn't honored by the child process. Check that your claude binary
-actually speaks SOCKS5 (the JS client in Claude Code does; some
-wrapper scripts may not).
+If the trace view is empty, the runner didn't capture any
+HTTP/1.1 traffic for the objective's time range — usually
+because:
 
-If they show `tshark_missing`, install tshark and re-run.
+- The agent used HTTP/2 (we don't parse HPACK yet — fall back to
+  `c17 claude-code --no-trace` if this is a blocker)
+- The agent bypassed `HTTPS_PROXY` entirely (some wrapper scripts
+  filter env vars)
+- The agent pinned cert fingerprints and rejected our MITM leaf
 
 ## Next steps
 

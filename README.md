@@ -20,11 +20,14 @@ you three things working together:
    required outcome, threaded discussion, and tool descriptions that
    refresh on every state change.
 3. **First-class LLM trace capture** — `c17 claude-code` spawns the
-   agent as a child of a SOCKS relay + TLS keylog tailer. At objective
-   close, the runner decrypts the flow with tshark, extracts the
-   Anthropic API shape (model, messages, tool_use, tool_result,
-   usage), redacts secrets, and uploads to the server for commander
-   review.
+   agent behind a loopback MITM TLS proxy with a per-session local
+   CA. Every HTTPS flow the agent makes is decrypted transparently
+   (transparent to the upstream — we're a real TLS client on that
+   leg), parsed as HTTP/1.1, extracted into the Anthropic API shape
+   (model, messages, tool_use, tool_result, usage), redacted for
+   secrets, and uploaded to the server for commander review. No
+   tshark, no pcap, no SSLKEYLOGFILE — just Node's built-in
+   `tls` + `crypto` modules.
 
 The authority model is a three-tier hierarchy: **commander** (full
 squadron power), **lieutenant** (can create/cancel objectives they
@@ -40,9 +43,9 @@ enforces this server-side.
        ┌─────────────────────┐
        │   c17 claude-code   │  ◀── the RUNNER: owns broker client,
        │   (long-lived)      │      SSE subscription, objectives,
-       │                     │      trace host (SOCKS + keylog + buffer)
+       │                     │      trace host (MITM proxy + local CA)
        └──────────┬──────────┘
-                  │ spawns with ALL_PROXY / SSLKEYLOGFILE / NODE_OPTIONS
+                  │ spawns with HTTPS_PROXY / NODE_EXTRA_CA_CERTS
                   │
                   ▼
        ┌─────────────────────┐
@@ -152,13 +155,12 @@ reverse-proxy paths cover today's use cases.
 ## Install
 
 ```bash
-# Everything (cli + server + tui + web + sdk + core)
+# Everything (cli + server + web + sdk + core)
 npm install -g @control17/c17
 
 # Or individual roles
 npm install -g @control17/cli       # operator terminal (includes `c17 claude-code`)
 npm install -g @control17/server    # self-hosted broker (includes the web UI)
-npm install -g @control17/tui       # interactive TUI (c17 connect consumes this)
 ```
 
 The web UI ships inside `@control17/server` as static assets. After
@@ -173,23 +175,23 @@ the broker boots, navigate to `http://<server>/`.
 | `@control17/core` | Runtime-agnostic broker logic — agent registry, push, SSE, event log |
 | `@control17/server` | Node broker (Hono + node:sqlite) with config loader, wizard, objectives store, trace upload endpoints, and the web UI |
 | `@control17/web` | Preact + Vite + UnoCSS SPA — team chat, roster, objectives, commander-only trace review |
-| `@control17/tui` | Ink-based terminal UI for `c17 connect` |
-| `@control17/cli` | Operator CLI: `c17 claude-code`, `c17 connect`, `c17 objectives`, `c17 push`, `c17 roster`, `c17 serve`, plus the internal `c17 mcp-bridge` |
+| `@control17/cli` | Operator CLI: `c17 claude-code`, `c17 objectives`, `c17 push`, `c17 roster`, `c17 serve`, plus the internal `c17 mcp-bridge` |
 
 **Light install:** `@control17/cli` has `@control17/sdk` as its only
-hard dependency. `@control17/server` and `@control17/tui` are optional
-peers — subcommands dynamically import them and print an install
-hint if missing.
+hard dependency. `@control17/server` is an optional peer —
+subcommands dynamically import it and print an install hint if
+missing.
 
 ## Requirements
 
 - Node.js 22+
 - pnpm 10+
-- (Optional, for trace decryption) `tshark` — `apt install tshark` or
-  `brew install wireshark`. Without it, trace capture still works but
-  traces land with `status: 'tshark_missing'` and no decoded entries.
 - (Optional) `claude` on PATH or pointed to via `$CLAUDE_PATH`, if
   you plan to run `c17 claude-code`.
+
+No external tools required for trace capture — the decoder is
+pure Node with zero runtime deps beyond `node-forge` for CA cert
+signing (bundled with the cli).
 
 ## Getting started
 
@@ -216,7 +218,7 @@ open http://127.0.0.1:5173
 
 # 4. Wrap a claude session with the runner. Trace capture on by default
 #    — use --no-trace to disable. Use --doctor to preflight-check the
-#    environment (claude binary, tshark, $TMPDIR, SOCKS bindability).
+#    environment (claude binary, $TMPDIR, loopback bind, CA generation).
 export C17_TOKEN=c17_your_slot_token
 c17 claude-code --doctor
 c17 claude-code

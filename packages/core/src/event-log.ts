@@ -41,8 +41,8 @@ export interface EventLog {
   tail(options?: EventLogTailOptions): Promise<Message[]>;
   /**
    * Return messages relevant to the viewer, newest-first. Used by
-   * the broker's /history endpoint to hydrate the TUI on connect and
-   * after reconnects.
+   * the broker's /history endpoint to hydrate the web UI on connect
+   * and after reconnects.
    */
   query(options: EventLogQueryOptions): Promise<Message[]>;
   /** Close any underlying resources. No-op for in-memory impl. */

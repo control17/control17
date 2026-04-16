@@ -19,13 +19,9 @@
  */
 
 import { ENV } from '@control17/sdk/protocol';
+import { UsageError } from './errors.js';
 
-export class UsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UsageError';
-  }
-}
+export { UsageError };
 
 export interface SetupCommandInput {
   configPath?: string;

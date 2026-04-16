@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs';
 import { type Broker, clampQueryLimit } from '@control17/core';
 import { PATHS, PROTOCOL_HEADER, PROTOCOL_VERSION } from '@control17/sdk/protocol';
 import {
+  AgentActivityKindSchema,
   CallsignSchema,
   CancelObjectiveRequestSchema,
   CompleteObjectiveRequestSchema,
@@ -36,7 +37,7 @@ import {
   TotpLoginRequestSchema,
   UpdateObjectiveRequestSchema,
   UpdateWatchersRequestSchema,
-  UploadObjectiveTraceRequestSchema,
+  UploadAgentActivityRequestSchema,
 } from '@control17/sdk/schemas';
 import type {
   Message,
@@ -50,6 +51,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
+import type { AgentActivityStore } from './agent-activity.js';
 import { type AuthBindings, createAuthMiddleware } from './auth.js';
 import { composeBriefing } from './briefing.js';
 import type { Logger } from './logger.js';
@@ -72,6 +74,14 @@ export interface AppOptions {
    * they're only exercising chat paths.
    */
   objectives?: ObjectivesStore;
+  /**
+   * Per-slot agent activity store — append-only timeline of
+   * LLM exchanges, opaque HTTP, and objective lifecycle markers
+   * the runner ships up via the streaming uploader. The
+   * `/agents/:callsign/activity*` endpoints are registered iff
+   * this is provided, same opt-out pattern as `objectives`.
+   */
+  agentActivity?: AgentActivityStore;
   version: string;
   logger: Logger;
   /**
@@ -173,6 +183,7 @@ const API_PATH_PREFIXES = [
   PATHS.pushVapidPublicKey,
   PATHS.pushSubscriptions,
   PATHS.objectives,
+  '/agents',
 ] as const;
 
 function isApiPath(pathname: string): boolean {
@@ -192,6 +203,7 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
     squadron,
     roles,
     objectives,
+    agentActivity,
     version,
     logger,
     shutdownSignal,
@@ -935,54 +947,6 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
     // same behaviour as `broadcast`/`send`. The web client still
     // renders its own posts because the web SSE handler does NOT
     // suppress self-echoes.
-    // POST /objectives/:id/traces (assignee only)
-    //
-    // The current assignee's runner uploads decoded LLM traces here.
-    // Gate on exact assignee match — not commanders, not originators.
-    // If a reassignment has happened mid-flight, the old assignee can
-    // no longer upload to the objective, which is correct: the trace
-    // belongs to whoever is doing the work now.
-    app.post(`${PATHS.objectives}/:id/traces`, auth, async (c) => {
-      const slot = c.get('slot');
-      const id = c.req.param('id');
-      const current = objectives.get(id);
-      if (!current) return c.json({ error: `no such objective: ${id}` }, 404);
-      if (current.assignee !== slot.callsign) {
-        return c.json({ error: 'only the current assignee may upload traces' }, 403);
-      }
-      const raw = await c.req.json().catch(() => null);
-      const parsed = UploadObjectiveTraceRequestSchema.safeParse(raw);
-      if (!parsed.success) {
-        return c.json({ error: 'invalid trace payload', details: parsed.error.issues }, 400);
-      }
-      try {
-        const trace = objectives.appendTrace(id, parsed.data);
-        return c.json(trace, 201);
-      } catch (err) {
-        const mapped = mapObjectivesError(err);
-        return c.json(mapped.body, mapped.status as 400 | 404 | 409 | 500);
-      }
-    });
-
-    // GET /objectives/:id/traces (commander only)
-    //
-    // Traces contain decrypted LLM prompts + completions, which are
-    // the most sensitive content on the squadron net. Only commanders
-    // can view them — operators, lieutenants, assignees, and watchers
-    // all get 403. This matches the spec's "commander-gated review"
-    // stance for trace content.
-    app.get(`${PATHS.objectives}/:id/traces`, auth, async (c) => {
-      const slot = c.get('slot');
-      if (slot.authority !== 'commander') {
-        return c.json({ error: 'only commanders may view objective traces' }, 403);
-      }
-      const id = c.req.param('id');
-      const current = objectives.get(id);
-      if (!current) return c.json({ error: `no such objective: ${id}` }, 404);
-      const traces = objectives.listTraces(id);
-      return c.json({ traces });
-    });
-
     app.post(`${PATHS.objectives}/:id/discuss`, auth, async (c) => {
       const slot = c.get('slot');
       const id = c.req.param('id');
@@ -1163,6 +1127,166 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
     });
     return c.json({ messages });
   });
+
+  // ─── Agent activity stream (registered iff `agentActivity` is set) ──
+  //
+  // The runner streams decoded HTTP exchanges + objective lifecycle
+  // markers here as they happen. Three endpoints:
+  //
+  //   POST /agents/:callsign/activity          — self upload only
+  //   GET  /agents/:callsign/activity          — self OR commander
+  //   GET  /agents/:callsign/activity/stream   — SSE live tail, self OR commander
+  //
+  // The POST-self gate is strict: a slot can only append its OWN
+  // activity, regardless of authority. Commanders read via GET,
+  // they don't write on behalf of other slots. The GET gate
+  // allows self (so the slot can introspect its own history) OR
+  // commander (for squadron-wide observability).
+  if (agentActivity) {
+    // Note: `AGENT_PATHS.activity` URL-encodes its argument (for
+    // SDK client use), so we can't call it with `:callsign` here
+    // — Hono would see `%3Acallsign` and never bind a param. Use
+    // the literal path for server-side route registration.
+    app.post('/agents/:callsign/activity', auth, async (c) => {
+      const slot = c.get('slot');
+      const callsignRaw = c.req.param('callsign');
+      const parsedCallsign = CallsignSchema.safeParse(callsignRaw);
+      if (!parsedCallsign.success) {
+        return c.json({ error: 'invalid callsign' }, 400);
+      }
+      const callsign = parsedCallsign.data;
+      if (callsign !== slot.callsign) {
+        return c.json(
+          {
+            error: `slot '${slot.callsign}' cannot upload activity for '${callsign}'`,
+          },
+          403,
+        );
+      }
+      const raw = await c.req.json().catch(() => null);
+      const parsed = UploadAgentActivityRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return c.json({ error: 'invalid activity payload', details: parsed.error.issues }, 400);
+      }
+      try {
+        const rows = agentActivity.append(callsign, parsed.data.events);
+        return c.json({ accepted: rows.length }, 201);
+      } catch (err) {
+        logger.warn('agent activity append failed', {
+          callsign,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return c.json({ error: 'failed to append activity' }, 500);
+      }
+    });
+
+    app.get('/agents/:callsign/activity', auth, (c) => {
+      const slot = c.get('slot');
+      const callsignRaw = c.req.param('callsign');
+      const parsedCallsign = CallsignSchema.safeParse(callsignRaw);
+      if (!parsedCallsign.success) {
+        return c.json({ error: 'invalid callsign' }, 400);
+      }
+      const callsign = parsedCallsign.data;
+      const isSelf = callsign === slot.callsign;
+      const isCommander = slot.authority === 'commander';
+      if (!isSelf && !isCommander) {
+        return c.json({ error: 'only the slot itself or a commander may read this activity' }, 403);
+      }
+      const fromRaw = c.req.query('from');
+      const toRaw = c.req.query('to');
+      const limitRaw = c.req.query('limit');
+      const kindRaw = c.req.queries('kind');
+
+      const from = fromRaw !== undefined ? Number(fromRaw) : undefined;
+      const to = toRaw !== undefined ? Number(toRaw) : undefined;
+      const limit = limitRaw !== undefined ? Number(limitRaw) : undefined;
+      if (from !== undefined && !Number.isFinite(from)) {
+        return c.json({ error: 'invalid `from` parameter' }, 400);
+      }
+      if (to !== undefined && !Number.isFinite(to)) {
+        return c.json({ error: 'invalid `to` parameter' }, 400);
+      }
+      if (limit !== undefined && !Number.isFinite(limit)) {
+        return c.json({ error: 'invalid `limit` parameter' }, 400);
+      }
+      // Validate each kind discriminator. Multiple ?kind= params
+      // are AND-combined at query time, OR-combined at the store
+      // level (row.kind IN (...)).
+      const kinds: Array<'objective_open' | 'objective_close' | 'llm_exchange' | 'opaque_http'> =
+        [];
+      if (kindRaw) {
+        for (const k of kindRaw) {
+          const parsedKind = AgentActivityKindSchema.safeParse(k);
+          if (!parsedKind.success) {
+            return c.json({ error: `invalid kind: ${k}` }, 400);
+          }
+          kinds.push(parsedKind.data);
+        }
+      }
+      const activity = agentActivity.list({
+        slotCallsign: callsign,
+        from,
+        to,
+        kinds: kinds.length > 0 ? kinds : undefined,
+        limit,
+      });
+      return c.json({ activity });
+    });
+
+    app.get('/agents/:callsign/activity/stream', auth, (c) => {
+      const slot = c.get('slot');
+      const callsignRaw = c.req.param('callsign');
+      const parsedCallsign = CallsignSchema.safeParse(callsignRaw);
+      if (!parsedCallsign.success) {
+        return c.json({ error: 'invalid callsign' }, 400);
+      }
+      const callsign = parsedCallsign.data;
+      const isSelf = callsign === slot.callsign;
+      const isCommander = slot.authority === 'commander';
+      if (!isSelf && !isCommander) {
+        return c.json(
+          { error: 'only the slot itself or a commander may stream this activity' },
+          403,
+        );
+      }
+      return streamSSE(c, async (stream) => {
+        const unsubscribe = agentActivity.subscribe(callsign, async (row) => {
+          try {
+            await stream.writeSSE({
+              id: String(row.id),
+              data: JSON.stringify(row),
+            });
+          } catch (err) {
+            logger.warn('agent activity sse write failed', {
+              callsign,
+              id: row.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        });
+        const onShutdown = (): void => {
+          stream.abort();
+        };
+        shutdownSignal?.addEventListener('abort', onShutdown, { once: true });
+        stream.onAbort(() => {
+          unsubscribe();
+          shutdownSignal?.removeEventListener('abort', onShutdown);
+          logger.info('agent activity sse stream closed', { callsign, by: slot.callsign });
+        });
+        logger.info('agent activity sse stream opened', {
+          callsign,
+          by: slot.callsign,
+        });
+        await stream.writeSSE({ event: 'connected', data: callsign });
+        while (!stream.aborted && !shutdownSignal?.aborted) {
+          await stream.sleep(15_000);
+          if (stream.aborted || shutdownSignal?.aborted) break;
+          await stream.writeSSE({ event: 'keepalive', data: '' });
+        }
+      });
+    });
+  }
 
   // ─── Static SPA serving (registered LAST so API routes match first) ─
 

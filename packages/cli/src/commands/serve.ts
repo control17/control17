@@ -17,19 +17,15 @@ import { DEFAULT_PORT, ENV } from '@control17/sdk/protocol';
 
 // Type-only import: compiles away, never loaded at runtime.
 import type { RunningServer, SquadronConfig } from '@control17/server';
+import { UsageError } from './errors.js';
+
+export { UsageError };
 
 export interface ServeCommandInput {
   configPath?: string;
   port?: number;
   host?: string;
   dbPath?: string;
-}
-
-export class UsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UsageError';
-  }
 }
 
 export async function runServeCommand(

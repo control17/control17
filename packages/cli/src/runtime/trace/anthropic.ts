@@ -1,10 +1,11 @@
 /**
  * Anthropic API payload extractor.
  *
- * Once tshark has decrypted the captured TLS into HTTP records, we
- * walk each request/response pair and, where the request is a
- * `POST /v1/messages` to an Anthropic-looking host, extract the
- * structured shape we care about:
+ * Fed by the HTTP/1.1 reassembler sitting inside the MITM TLS proxy:
+ * once a request/response pair is decoded from plaintext bytes, we
+ * walk each exchange and, where the request is a `POST /v1/messages`
+ * to an Anthropic-looking host, extract the structured shape we care
+ * about:
  *
  *   - model, max_tokens, temperature, system prompt
  *   - messages array (user/assistant/tool role, content blocks

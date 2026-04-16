@@ -17,6 +17,7 @@
  * state based on whether the stream is currently live.
  */
 
+import { MessageSchema } from '@control17/sdk/schemas';
 import { signal } from '@preact/signals';
 import { getClient } from './client.js';
 import { appendMessages } from './messages.js';
@@ -69,15 +70,12 @@ export function startSubscribe(options: StartSubscribeOptions): () => void {
     source.addEventListener('message', (event) => {
       if (!event.data) return;
       try {
-        const parsed = JSON.parse(event.data) as unknown;
-        const msg = parsed as Parameters<typeof appendMessages>[1][number];
+        const msg = MessageSchema.parse(JSON.parse(event.data));
         appendMessages(callsign, [msg]);
         // If this frame carried an objective event, refresh the
         // objectives signal so the sidebar count + panel stay in sync
-        // with the server's authoritative state. Fire-and-forget —
-        // stale-for-a-moment is fine since the SSE message itself
-        // carries enough text for the Transcript to render.
-        const data = msg?.data as Record<string, unknown> | undefined;
+        // with the server's authoritative state.
+        const data = msg.data as Record<string, unknown> | undefined;
         if (data && data.kind === 'objective') {
           void loadObjectives().catch(() => {
             /* swallow — next event will retry */

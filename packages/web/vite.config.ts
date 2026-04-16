@@ -38,6 +38,7 @@ const PROXIED_PATHS = [
   '/history',
   '/session',
   '/objectives',
+  '/agents',
 ];
 
 export default defineConfig({

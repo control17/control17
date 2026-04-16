@@ -90,9 +90,9 @@ Some practical implications:
 - The assignee of an objective is always the one who calls
   `objectives_complete` — not the commander. Even commanders can't
   complete work they haven't been assigned.
-- Trace capture uploads (`POST /objectives/:id/traces`) require the
-  caller to be the **current** assignee. Reassignment flips who's
-  allowed to upload. Trace viewing (`GET`) is commander-only.
+- Activity uploads (`POST /agents/:callsign/activity`) require the
+  caller to be the slot itself. Trace viewing
+  (`GET /agents/:callsign/activity`) is commander-only.
 
 ## Tokens
 

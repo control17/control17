@@ -47,8 +47,8 @@ The broker serves two kinds of clients:
 
 Both planes pass through the same auth middleware and resolve to the
 same `LoadedSlot`. Downstream handlers (`/push`, `/subscribe`,
-`/history`, `/objectives/*`, `/objectives/:id/traces`) never care
-which plane a request came from — they care about the slot's
+`/history`, `/objectives/*`, `/agents/:callsign/activity`) never
+care which plane a request came from — they care about the slot's
 **authority**.
 
 ## Authority model
@@ -81,15 +81,15 @@ operator's CLI process relates to the agent it's driving:
            │   • @control17/sdk Client        │   <-- HTTP to broker
            │   • /briefing + objectives       │
            │   • SSE forwarder loop           │
-           │   • TraceHost (HTTP CONNECT + keylog)   │
+           │   • TraceHost (MITM proxy + local CA)   │
            │   • IPC server on UDS            │
            │   • spawns `claude` as a child   │
            │                                  │
            └──────────────┬───────────────────┘
                           │ exec claude with env
                           │   HTTPS_PROXY=http://127.0.0.1:$PORT
-                          │   SSLKEYLOGFILE=$PATH
-                          │   NODE_OPTIONS=--tls-keylog=$PATH
+                          │   
+                          │   NODE_EXTRA_CA_CERTS=$PATH
                           │   C17_RUNNER_SOCKET=/tmp/.c17-runner-$PID.sock
                           │
                           ▼
@@ -125,7 +125,7 @@ have it talk HTTP directly to the broker — is what control17 used to
 do. The problem with that shape is that the bridge is *downstream* of
 the agent process, so it can't observe the agent's network traffic.
 You can't MitM OAuth flows cleanly, you can't plant
-`SSLKEYLOGFILE=`, you can't redirect `ALL_PROXY=` after the child is
+`NODE_EXTRA_CA_CERTS=`, you can't redirect `HTTPS_PROXY=` after the child is
 already running.
 
 Flipping the tree gives the runner an upstream position relative to
@@ -133,7 +133,7 @@ the agent. The runner can:
 
 - Bake env vars into the agent's initial environment
 - Run a loopback HTTP CONNECT relay the agent's HTTPS traffic flows through
-- Tail the TLS keylog file the agent writes
+- Terminate TLS on both legs using a per-session local CA
 - Attribute captured bytes to the objective the agent is working on
 - Clean up `.mcp.json` modifications on any exit path
 
@@ -185,35 +185,28 @@ user-facing walkthrough.
 
 ## Trace capture
 
-When an objective becomes active on a slot, the runner opens a
-**span** keyed on the objective id. Every byte flowing through the
-HTTP CONNECT relay and every entry appended to the TLS keylog lands in the
-span's buffer (broadcast to all currently-open spans — see below).
-When the objective terminates, the runner closes the span and fires
-the decrypt pipeline:
+The runner maintains one append-only **agent activity stream**
+per slot. The proxy relay's MITM path decrypts every HTTPS flow
+on the fly: the agent makes a CONNECT request to the proxy, the
+proxy dials the real upstream as a normal TLS client, then
+terminates TLS toward the agent with a cert issued on-demand
+from the per-session local CA (which the agent trusts via
+`NODE_EXTRA_CA_CERTS`). Between the two TLS legs lives plaintext
+in both directions — reassembled as HTTP/1.1 exchanges in real
+time and streamed to the broker as activity events.
+
+Each completed HTTP/1.1 exchange runs through the decode
+pipeline as soon as the reassembler finishes it:
 
 ```
-   ProxyChunk[] + KeylogEntry[]
+   ProxyChunk[]   (plaintext, arriving live from the MITM proxy)
            │
            ▼
    ┌───────────────┐
-   │ writePcap     │  synthesize a LINKTYPE_RAW pcap with a real
-   │ (pcap.ts)     │  TCP 3-way handshake, PSH/ACK data packets,
-   │               │  FIN close. Fake IPs in 127.0.0.0/8. Per-
-   │               │  session seq/ack tracking.
-   └───────┬───────┘
-           │
-           ▼
-   ┌───────────────┐
-   │ tshark -r …   │  `-o tls.keylog_file:<keys>` decrypts with
-   │               │  the captured keylog. Output is per-packet
-   │               │  JSON filtered to `http` records.
-   └───────┬───────┘
-           │
-           ▼
-   ┌───────────────┐
-   │ parseTshark   │  correlate request/response by tcp.stream,
-   │ JSON          │  assemble HttpExchange records.
+   │ Http1         │  per-TLS-session rolling buffer; emits
+   │ Reassembler   │  completed HTTP/1.1 request/response pairs
+   │ (http1-       │  in FIFO order — handles Content-Length,
+   │  reassembler) │  chunked, gzip/deflate/br.
    └───────┬───────┘
            │
            ▼
@@ -231,24 +224,30 @@ the decrypt pipeline:
            │
            ▼
    ┌───────────────┐
-   │ uploadObjective
-   │     Trace     │  POST /objectives/:id/traces (assignee-only).
+   │ ActivityUpload│  batched POST /agents/:callsign/activity.
+   │     er        │  Flushes every 50 events / 64 KB / 500 ms.
    └───────────────┘
 ```
 
-The final payload is a `DecodedSpan` with one of five statuses:
+Zero runtime deps — just Node's built-in `tls` + `crypto` +
+`zlib` + a small amount of `node-forge` for CA cert signing.
+No tshark, no pcap synthesis, no TLS keylog file.
 
-| Status | Meaning |
-|---|---|
-| `decoded` | tshark ran, entries were extracted, uploaded OK |
-| `tshark_missing` | tshark isn't on PATH; raw counts surface, nothing uploaded |
-| `tshark_failed` | tshark exited non-zero; diagnostic logged |
-| `no_records` | tshark ran cleanly but found nothing HTTP-shaped |
-| `empty` | no bytes captured during the span |
+Activity events are one of four kinds: `llm_exchange`,
+`opaque_http`, `objective_open`, `objective_close`. The
+objective lifecycle markers are emitted by the runner's
+objectives tracker whenever its open set changes and flow
+through the same uploader.
 
-Commanders view captured traces in the web UI's **TracePanel** on
-each objective's detail page. Non-commanders get a 403 from
-`GET /objectives/:id/traces`.
+Per-objective "traces" are a **time-range view** over this
+stream: the web UI queries
+`GET /agents/<assignee>/activity?from=<open>&to=<close>&kind=llm_exchange`
+to reconstruct what the LLM was doing during an objective's
+lifetime. No per-objective blobs are stored anywhere.
+
+Commanders view traces in the web UI's **TracePanel** on each
+objective's detail page. Non-commanders get a 403 from
+`GET /agents/:callsign/activity`.
 
 See [tracing.mdx](./tracing.mdx) for the full setup guide.
 
@@ -304,7 +303,7 @@ See [tracing.mdx](./tracing.mdx) for the full setup guide.
                  │  serves:                         │
                  │   • machine API (bearer)         │
                  │   • human API (session cookie)   │
-                 │   • /objectives + /traces        │
+                 │   • /objectives + /agents/*      │
                  │   • @control17/web static SPA    │
                  │                                  │
                  │  first-run wizard for setup      │
@@ -320,9 +319,9 @@ See [tracing.mdx](./tracing.mdx) for the full setup guide.
               │  • SSE forwarder → bridge IPC     │
               │  • TraceHost:                     │
               │     - HTTP CONNECT relay (loopback)      │
-              │     - NSS keylog tailer           │
-              │     - per-span TraceBuffer        │
-              │  • spawns `claude` with ALL_PROXY │
+              │     - per-session CA (node-forge)        │
+              │     - streaming ActivityUploader         │
+              │  • spawns `claude` with HTTPS_PROXY  │
               │  • backs up + restores .mcp.json  │
               └──────────┬────────────────────────┘
                          │ spawns
@@ -331,7 +330,7 @@ See [tracing.mdx](./tracing.mdx) for the full setup guide.
               │             claude                │
               │                                   │
               │  HTTPS → HTTP CONNECT relay → upstream   │
-              │  TLS writes → keylog file         │
+              │  plaintext → MITM proxy         │
               │  stdio MCP → c17 mcp-bridge       │
               └──────────┬────────────────────────┘
                          │ stdio
@@ -352,13 +351,12 @@ See [tracing.mdx](./tracing.mdx) for the full setup guide.
 | **`@control17/core`** | Broker logic with zero runtime deps. Registry, push fanout, event log, SSE delivery, identity enforcement. | To build a custom broker runtime (Durable Objects, etc.) |
 | **`@control17/server`** | Node broker. Wraps `core` in Hono + `node:sqlite`. Squadron config loader, first-run wizard, objectives + traces persistence, built-in web UI. | To host a self-hosted broker |
 | **`@control17/web`** | Preact + Vite + UnoCSS PWA served by the broker. Real-time chat, roster, objectives with commander-only TracePanel, Web Push. | Nothing — it ships inside `@control17/server` |
-| **`@control17/tui`** | Ink-based terminal UI. | To use `c17 connect` (the TUI is an optional peer of the CLI) |
-| **`@control17/cli`** | Operator terminal. `c17 claude-code`, `c17 connect`, `c17 push`, `c17 roster`, `c17 objectives`, `c17 serve`. Also hosts the internal `c17 mcp-bridge` verb. | To push / inspect from a terminal, run the runner, or join the squadron net interactively |
+| **`@control17/cli`** | Operator terminal. `c17 claude-code`, `c17 push`, `c17 roster`, `c17 objectives`, `c17 serve`. Also hosts the internal `c17 mcp-bridge` verb. | To push / inspect from a terminal or run the runner |
 
 **Light install:** `@control17/cli` has `@control17/sdk` as its only
-hard dependency. `@control17/server` and `@control17/tui` are
-optional peers — subcommands dynamically import them and print an
-install hint if missing.
+hard dependency. `@control17/server` is an optional peer —
+subcommands dynamically import it and print an install hint if
+missing.
 
 ## Identity model
 
@@ -440,19 +438,22 @@ shell for humans.
    `notifications/tools/list_changed` out to the bridge — the
    agent's next `tools/list` sees the new objective in its tool
    descriptions.
-4. **Trace span opens** for the new objective. Every byte the agent
-   sends through the HTTP CONNECT relay and every TLS key written to the
-   keylog is now attributed to this span.
+4. **`objective_open` event** is appended to the slot's activity
+   stream, marking the start of the time range that will later
+   represent this objective's trace. Every HTTP/1.1 exchange the
+   agent makes from here on flows through the MITM proxy → HTTP
+   reassembler → activity uploader as a live `llm_exchange` or
+   `opaque_http` event.
 5. The agent works: updates status, posts discussion messages,
    eventually calls `objectives_complete`.
 6. On terminal transition (`done` or `cancelled`), the store emits
-   the lifecycle event, the tracker refreshes again, and the runner
-   **closes the trace span**.
-7. Span close triggers the decrypt pipeline (above) in the
-   background. On success, the runner uploads the decoded entries to
-   `POST /objectives/:id/traces`.
-8. A commander opens the objective in the web UI. The TracePanel
-   fetches `GET /objectives/:id/traces`, which 200s only for
+   the lifecycle event, the tracker refreshes again, and an
+   `objective_close` event is appended to the slot's activity
+   stream. No batch flush — every exchange has already been
+   streamed up.
+7. A commander opens the objective in the web UI. The TracePanel
+   queries `GET /agents/<assignee>/activity?from=<createdAt>
+   &to=<completedAt>&kind=llm_exchange`, which 200s only for
    commanders. The panel renders model, usage, messages, and
    tool_use / tool_result blocks inline.
 

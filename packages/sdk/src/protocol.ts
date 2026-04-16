@@ -37,7 +37,18 @@ export const OBJECTIVE_PATHS = {
   reassign: (id: string) => `/objectives/${encodeURIComponent(id)}/reassign`,
   discuss: (id: string) => `/objectives/${encodeURIComponent(id)}/discuss`,
   watchers: (id: string) => `/objectives/${encodeURIComponent(id)}/watchers`,
-  traces: (id: string) => `/objectives/${encodeURIComponent(id)}/traces`,
+} as const;
+
+/**
+ * Path builders for per-agent activity stream endpoints.
+ *
+ *   POST /agents/:callsign/activity            — append (self only)
+ *   GET  /agents/:callsign/activity            — range query (self or commander)
+ *   GET  /agents/:callsign/activity/stream     — SSE live tail (self or commander)
+ */
+export const AGENT_PATHS = {
+  activity: (callsign: string) => `/agents/${encodeURIComponent(callsign)}/activity`,
+  activityStream: (callsign: string) => `/agents/${encodeURIComponent(callsign)}/activity/stream`,
 } as const;
 
 export const DEFAULT_PORT = 8717 as const;

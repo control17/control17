@@ -62,10 +62,10 @@ packages/web/
 │   │   ├── roster.ts       # roster signal + polling
 │   │   ├── messages.ts     # transcript state, threadKeyOf, appendMessages
 │   │   ├── sse.ts          # EventSource wrapper + reconnect backfill
-│   │   ├── view.ts         # currentView signal (thread/roster)
+│   │   ├── view.ts         # view signal (thread/overview/objectives/agent)
 │   │   ├── push.ts         # Web Push enable/disable + state signal
 │   │   ├── markdown.ts     # inline bold/italic/code renderer
-│   │   └── theme.ts        # sender color hashing (matches the TUI)
+│   │   └── theme.ts        # sender color hashing
 │   ├── routes/
 │   │   ├── Boot.tsx        # loading placeholder
 │   │   ├── Login.tsx       # TOTP form

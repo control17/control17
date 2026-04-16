@@ -22,7 +22,7 @@ import { __resetMessagesForTests, appendMessages } from '../src/lib/messages.js'
 import { __resetRosterForTests, roster } from '../src/lib/roster.js';
 import { session } from '../src/lib/session.js';
 import { __resetSseForTests } from '../src/lib/sse.js';
-import { __resetViewForTests, currentView, selectThread } from '../src/lib/view.js';
+import { __resetViewForTests, selectThread, view } from '../src/lib/view.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -128,7 +128,7 @@ describe('<Transcript />', () => {
     expect(screen.getByText('second')).toBeTruthy();
   });
 
-  it('switches threads when the currentView signal changes', async () => {
+  it('switches threads when the view signal changes', async () => {
     appendMessages('ACTUAL', [
       mkMsg({ id: 'p', ts: 1, body: 'primary msg' }),
       mkMsg({ id: 'd', ts: 2, agentId: 'build-bot', from: 'ACTUAL', body: 'dm msg' }),
@@ -189,23 +189,23 @@ describe('<Sidebar />', () => {
     render(<Sidebar viewer="ACTUAL" />);
     fireEvent.click(screen.getByText('build-bot'));
     await waitFor(() => {
-      expect(currentView.value).toEqual({ kind: 'thread', key: 'dm:build-bot' });
+      expect(view.value).toEqual({ kind: 'thread', key: 'dm:build-bot' });
     });
   });
 
   it('clicking Team Chat selects the primary thread', async () => {
     setRoster();
-    currentView.value = { kind: 'thread', key: 'dm:build-bot' };
+    view.value = { kind: 'thread', key: 'dm:build-bot' };
     render(<Sidebar viewer="ACTUAL" />);
     fireEvent.click(screen.getByText('Team Chat'));
     await waitFor(() => {
-      expect(currentView.value).toEqual({ kind: 'thread', key: 'primary' });
+      expect(view.value).toEqual({ kind: 'thread', key: 'primary' });
     });
   });
 
   it('active teammate row gets the primary-color left border', () => {
     setRoster();
-    currentView.value = { kind: 'thread', key: 'dm:build-bot' };
+    view.value = { kind: 'thread', key: 'dm:build-bot' };
     render(<Sidebar viewer="ACTUAL" />);
     const btn = screen.getByText('build-bot').closest('button');
     expect(btn?.className).toMatch(/border-brand-primary/);
@@ -359,7 +359,7 @@ describe('<RosterPanel />', () => {
     });
   });
 
-  it('clicking a teammate opens a DM thread via currentView', async () => {
+  it('clicking a teammate opens a DM thread via view', async () => {
     roster.value = {
       teammates: [
         { callsign: 'ACTUAL', role: 'operator', authority: 'commander' },
@@ -371,7 +371,7 @@ describe('<RosterPanel />', () => {
     const button = screen.getByRole('button', { name: /message build-bot/i });
     fireEvent.click(button);
     await waitFor(() => {
-      expect(currentView.value).toEqual({ kind: 'thread', key: 'dm:build-bot' });
+      expect(view.value).toEqual({ kind: 'thread', key: 'dm:build-bot' });
     });
   });
 
@@ -435,16 +435,16 @@ describe('<Sidebar /> overview button', () => {
     expect(btn.textContent).toMatch(/Overview/);
   });
 
-  it('clicking the overview button flips currentView to overview', async () => {
+  it('clicking the overview button flips view to overview', async () => {
     render(<Sidebar viewer="ACTUAL" />);
     fireEvent.click(screen.getByRole('button', { name: /open team overview/i }));
     await waitFor(() => {
-      expect(currentView.value).toEqual({ kind: 'overview' });
+      expect(view.value).toEqual({ kind: 'overview' });
     });
   });
 
   it('overview button highlights when view is overview', () => {
-    currentView.value = { kind: 'overview' };
+    view.value = { kind: 'overview' };
     render(<Sidebar viewer="ACTUAL" />);
     const btn = screen.getByRole('button', { name: /open team overview/i });
     expect(btn.className).toMatch(/border-brand-primary/);

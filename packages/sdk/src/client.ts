@@ -7,6 +7,7 @@
  */
 
 import {
+  AGENT_PATHS,
   AUTH_HEADER,
   OBJECTIVE_PATHS,
   PATHS,
@@ -18,19 +19,20 @@ import {
   GetObjectiveResponseSchema,
   HealthResponseSchema,
   HistoryResponseSchema,
+  ListAgentActivityResponseSchema,
   ListObjectivesResponseSchema,
-  ListObjectiveTracesResponseSchema,
   MessageSchema,
   ObjectiveSchema,
-  ObjectiveTraceSchema,
   PushPayloadSchema,
   PushResultSchema,
   PushSubscriptionResponseSchema,
   RosterResponseSchema,
   SessionResponseSchema,
+  UploadAgentActivityResponseSchema,
   VapidPublicKeyResponseSchema,
 } from './schemas.js';
 import type {
+  AgentActivityRow,
   BriefingResponse,
   CancelObjectiveRequest,
   CreateObjectiveRequest,
@@ -38,10 +40,10 @@ import type {
   GetObjectiveResponse,
   HealthResponse,
   HistoryQuery,
+  ListAgentActivityQuery,
   ListObjectivesQuery,
   Message,
   Objective,
-  ObjectiveTrace,
   PushPayload,
   PushResult,
   PushSubscriptionPayload,
@@ -52,7 +54,8 @@ import type {
   TotpLoginRequest,
   UpdateObjectiveRequest,
   UpdateWatchersRequest,
-  UploadObjectiveTraceRequest,
+  UploadAgentActivityRequest,
+  UploadAgentActivityResponse,
   VapidPublicKeyResponse,
 } from './types.js';
 
@@ -258,8 +261,8 @@ export class Client {
   /**
    * List all slots defined on the squadron (including any not currently
    * connected) plus the runtime connection state of each registered
-   * agent. Use this for the squadron roster view in the TUI and for
-   * the `roster` MCP tool on the link side.
+   * agent. Use this for the squadron roster view in the web UI and for
+   * the `roster` MCP tool exposed by the runner.
    */
   async roster(): Promise<RosterResponse> {
     const resp = await this.request(PATHS.roster, { method: 'GET' });
@@ -387,31 +390,51 @@ export class Client {
   }
 
   /**
-   * Upload a captured trace for an objective. Only the current
-   * assignee is allowed server-side — the runner owned by that slot
-   * captures the agent's LLM traffic via its SOCKS relay, decrypts
-   * with tshark + TLS keys, and ships the structured entries here.
+   * Append agent activity events for `callsign`. Only the slot
+   * itself may POST its own activity (server returns 403 for any
+   * other caller). Used by the runner's streaming uploader to
+   * ship decoded HTTP exchanges + objective lifecycle markers to
+   * the broker in real time.
    */
-  async uploadObjectiveTrace(
-    id: string,
-    payload: UploadObjectiveTraceRequest,
-  ): Promise<ObjectiveTrace> {
-    const resp = await this.request(OBJECTIVE_PATHS.traces(id), {
+  async uploadAgentActivity(
+    callsign: string,
+    payload: UploadAgentActivityRequest,
+  ): Promise<UploadAgentActivityResponse> {
+    const resp = await this.request(AGENT_PATHS.activity(callsign), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    return ObjectiveTraceSchema.parse(await this.json(resp));
+    return UploadAgentActivityResponseSchema.parse(await this.json(resp));
   }
 
   /**
-   * List all traces uploaded for an objective. Commander-only
-   * server-side — operators and non-commanders get 403. Returns
-   * traces oldest-first so the UI can render them in order.
+   * List agent activity events for `callsign`. Readable by the slot
+   * itself OR any commander (non-commanders reading other slots
+   * get 403). Supports range filtering by `from`/`to` timestamps
+   * and by kind. Returns newest-first up to `limit` rows.
+   *
+   * Objective traces are a view over this endpoint: query with
+   * `from=objective.openedAt`, `to=objective.closedAt`, and
+   * `kind=llm_exchange` to pull the LLM calls made during an
+   * objective's lifetime.
    */
-  async listObjectiveTraces(id: string): Promise<ObjectiveTrace[]> {
-    const resp = await this.request(OBJECTIVE_PATHS.traces(id), { method: 'GET' });
-    return ListObjectiveTracesResponseSchema.parse(await this.json(resp)).traces;
+  async listAgentActivity(
+    callsign: string,
+    query: ListAgentActivityQuery = {},
+  ): Promise<AgentActivityRow[]> {
+    const params = new URLSearchParams();
+    if (query.from !== undefined) params.set('from', String(query.from));
+    if (query.to !== undefined) params.set('to', String(query.to));
+    if (query.kind !== undefined) {
+      const kinds = Array.isArray(query.kind) ? query.kind : [query.kind];
+      for (const k of kinds) params.append('kind', k);
+    }
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    const qs = params.toString();
+    const path = qs ? `${AGENT_PATHS.activity(callsign)}?${qs}` : AGENT_PATHS.activity(callsign);
+    const resp = await this.request(path, { method: 'GET' });
+    return ListAgentActivityResponseSchema.parse(await this.json(resp)).activity;
   }
 
   async history(query: HistoryQuery = {}): Promise<Message[]> {

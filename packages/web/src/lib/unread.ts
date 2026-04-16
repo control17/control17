@@ -18,7 +18,7 @@
  *   3. SSE stream opens. New messages land in `messagesByThread` but
  *      lastRead stays at the seed value, so unread counts grow for
  *      every thread except the one the user is actively looking at.
- *   4. An `effect()` in Shell watches `currentView` + `messagesByThread`
+ *   4. An `effect()` in Shell watches `view` + `messagesByThread`
  *      and calls `markThreadRead(activeKey, latestTs)` whenever either
  *      changes — that's what keeps the active thread always at zero
  *      unread while the user is on it.

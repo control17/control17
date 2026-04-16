@@ -1,6 +1,6 @@
 ---
 title: Trace capture
-description: How c17 claude-code captures, decrypts, and uploads per-objective LLM traces — and what commanders can review in the web UI.
+description: How c17 claude-code captures, parses, and uploads per-objective LLM traces via a loopback MITM TLS proxy — and what commanders can review in the web UI.
 section: Docs
 order: 30
 ---
@@ -14,21 +14,24 @@ what tools it actually called, scoped to each objective, without
 embedding observability hooks into the agent itself.
 
 The runner (`c17 claude-code`) runs **upstream** of the claude
-process and intercepts its network traffic at the TCP layer via a
-loopback HTTP CONNECT relay. TLS keys are captured via `SSLKEYLOGFILE` +
-`--tls-keylog` in the child's env. At objective close, the runner
-shells out to `tshark` to decrypt the captured bytes, extracts the
-Anthropic API shape, redacts secrets, and uploads the structured
-entries to the broker for commander review.
+process and intercepts its network traffic at the TLS layer via a
+**loopback MITM TLS proxy** with a per-session local CA. Every
+HTTPS request the agent makes is transparently decrypted by the
+proxy, observed as plaintext, re-encrypted toward the real
+upstream, and passed through. From the upstream's point of view,
+we are a normal TLS client doing standard SNI + cert validation —
+it can't tell us apart from any other user-agent, which means
+OAuth flows, token refreshes, streaming responses, and SSE all
+work identically.
+
+Zero external tools. No tshark. No pcap. No SSLKEYLOGFILE. Just
+Node's built-in `crypto` + `tls` + a tiny amount of node-forge
+for cert signing.
 
 ## Setup
 
 ```bash
-# Required: tshark for decryption
-apt install tshark             # Debian / Ubuntu
-brew install wireshark         # macOS
-
-# Optional: verify everything's in place
+# Verify everything's in place before your first run.
 c17 claude-code --doctor
 ```
 
@@ -36,222 +39,229 @@ The `--doctor` command runs four checks and prints pass/warn/fail:
 
 - **`claude` binary** — must be on `$PATH` or pointed to via
   `$CLAUDE_PATH`. FAIL if missing.
-- **tshark** — WARN if missing. Trace capture still works but
-  spans land with `status: 'tshark_missing'` and no decoded
-  entries.
 - **`$TMPDIR` writable** — must be writable with `0o600`. The
-  keylog and pcap temp files live here. FAIL if not writable.
-- **proxy loopback bindable** — must be able to `listen()` on
+  runner writes the CA cert PEM here. FAIL if not writable.
+- **loopback proxy bindable** — must be able to `listen()` on
   `127.0.0.1:0`. FAIL on kernel-level networking issues.
+- **trace CA + leaf cert generation** — exercises the full
+  node-forge signing pipeline end-to-end. Catches runtime
+  crypto issues before the first real spawn.
 
-Exit code is `0` if no checks failed (WARN doesn't fail), `1`
-otherwise.
+Exit code is `0` if no checks failed, `1` otherwise.
 
 ## What the runner does at startup
 
 When you run `c17 claude-code` (without `--no-trace`), the runner:
 
-1. Starts a HTTP CONNECT relay on `127.0.0.1:<random ephemeral port>`.
-   Records every byte flowing in either direction, tagged with
-   session id + timestamp + upstream `(host, port)`.
-2. Creates a keylog file at `$TMPDIR/c17-keylog-<pid>-<nonce>.log`
-   with `0o600`. Starts a 100ms-interval poll tailer on it.
-3. Creates a per-objective `TraceBuffer` in memory. Opens a span
-   for every objective currently assigned to the slot (from the
-   initial briefing).
-4. Backs up the operator's `.mcp.json` to a pid-scoped tmp
-   directory, atomic-writes a new one with a `control17` entry
+1. **Generates a fresh per-session local CA.** One CA keypair
+   + one shared leaf keypair, both held in memory. The CA cert
+   (public half only) is written to
+   `$TMPDIR/c17-trace-ca-<pid>-<nonce>.pem` at `0o600`. The CA's
+   private key **never touches disk**.
+2. **Starts a loopback HTTP CONNECT proxy** on a random ephemeral
+   port. The proxy is configured with the CA's cert pool so it
+   can mint leaf certs on demand for any hostname the agent
+   asks for.
+3. **Starts the activity uploader.** Seeds `objective_open`
+   events for every objective currently assigned to the slot
+   (from the initial briefing) and begins streaming any activity
+   events to `POST /agents/:callsign/activity`.
+4. **Backs up the operator's `.mcp.json`** to a pid-scoped tmp
+   directory, atomic-writes a new one with a `c17` entry
    pointing at `c17 mcp-bridge`.
-5. Spawns `claude` with inherited stdio and these env vars merged
-   into the child's environment:
+5. **Spawns `claude`** with inherited stdio and these env vars
+   merged in:
 
    ```
    HTTPS_PROXY=http://127.0.0.1:<port>
    HTTP_PROXY=http://127.0.0.1:<port>
    ALL_PROXY=http://127.0.0.1:<port>
+   NO_PROXY=localhost,127.0.0.1,::1,<caller's value>
    NODE_USE_ENV_PROXY=1
-   SSLKEYLOGFILE=<keylog path>
-   NODE_OPTIONS=<existing>  --tls-keylog=<keylog path>
+   NODE_EXTRA_CA_CERTS=<path to CA pem>
+   NODE_TLS_REJECT_UNAUTHORIZED=0
    C17_RUNNER_SOCKET=<IPC socket path>
    ```
 
-   Any existing `NODE_OPTIONS` is **appended to**, not overwritten.
-   The relay speaks HTTP CONNECT rather than SOCKS5 — undici (the
-   HTTP client in Claude Code and the Anthropic SDK) only supports
-   HTTP CONNECT proxies in `HTTPS_PROXY` and rejects `socks5://`
-   with "unsupported proxy".
+   `NODE_TLS_REJECT_UNAUTHORIZED=0` is a failsafe for packaged-
+   binary Node distributions (pkg, sea, yao-pkg) that ship their
+   own bundled cert store which `NODE_EXTRA_CA_CERTS` can't
+   extend. Claude Code v2.x is such a binary. The blast radius
+   is scoped to this single loopback-only runner session, so
+   the risk is self-contained.
 
-6. Waits for claude to exit. On any exit path (normal, SIGINT,
-   SIGTERM, uncaughtException), restores the original `.mcp.json`,
-   deletes the keylog file, closes the proxy relay, and unlinks
-   the IPC socket.
+6. **Waits for claude to exit.** On any exit path (normal,
+   SIGINT, SIGTERM, uncaughtException), restores the original
+   `.mcp.json`, deletes the CA cert PEM, closes the proxy relay,
+   and unlinks the IPC socket.
 
-## The span lifecycle
+## How the MITM works
 
-A **span** is a buffered capture window keyed on an objective id.
-Multiple spans can be open concurrently — every proxy chunk and
-every keylog entry is broadcast to all currently-open spans. This
-is deliberate: a single TCP connection can carry work for multiple
-objectives the agent is juggling, and time-bounded union is the
-safest default.
+When the agent issues `CONNECT api.anthropic.com:443` through the
+proxy:
 
-- **Open**: triggered by the objectives tracker noticing a new
-  objective in the slot's open set (assigned / taken / newly
-  self-created). The runner calls `traceHost.openSpan(id)`.
-- **Ingest**: every proxy chunk calls `buffer.ingestChunk(chunk)`,
-  every keylog entry calls `buffer.ingestKey(entry)`. Chunks hit a
-  soft 10MB cap per span, after which the span is marked
-  `truncated` and new chunks are dropped (but keys still flow in
-  unconditionally — they're tiny and essential for decryption).
-- **Close**: triggered by the tracker noticing the objective is no
-  longer open (completed / cancelled / reassigned away). The
-  runner calls `traceHost.closeSpan(id)` which returns a frozen
-  `SpanSnapshot` with `chunks`, `keys`, `bytesRecorded`,
-  `truncated`, and the open/close timestamps.
+```
+      agent                proxy               upstream
+        │                    │                    │
+        │ CONNECT host:443   │                    │
+        │───────────────────>│                    │
+        │                    │ TLS handshake      │
+        │                    │───────────────────>│
+        │                    │ (standard SNI +    │
+        │                    │  cert validation)  │
+        │                    │<───────────────────│
+        │ 200 Established    │                    │
+        │<───────────────────│                    │
+        │ ClientHello        │                    │
+        │───────────────────>│                    │
+        │ [proxy issues leaf │                    │
+        │  cert for host,    │                    │
+        │  signs with CA,    │                    │
+        │  wraps socket in   │                    │
+        │  TLSSocket server] │                    │
+        │ ServerHello...     │                    │
+        │<───────────────────│                    │
+        │ plain HTTP req ──> │ encrypted req ──>  │
+        │ plain HTTP rsp <── │ encrypted rsp <──  │
+```
 
-## The decrypt pipeline
+Two independent TLS sessions. The agent talks to us over TLS
+(trusting our CA via `NODE_EXTRA_CA_CERTS`), we talk to the
+upstream over TLS (with the upstream's real cert). In between,
+we have plaintext in both directions — which we hand to the
+decoder as-is.
 
-Span close kicks off an async decrypt in the background. The
-pipeline lives in `packages/cli/src/runtime/trace/`:
+## The streaming activity model
 
-1. **`writePcap`** (`pcap.ts`) — synthesize a LINKTYPE_RAW pcap
-   from the chunks. Each proxy session becomes a TCP flow with a
-   real 3-way handshake, monotonic seq/ack numbers per direction,
-   PSH/ACK data packets, and a clean FIN close. Fake source and
-   destination IPs live in 127.0.0.0/8 so the trace is obviously
-   synthetic; upstream port is the real port the agent connected
-   to so TLS dissection still picks up `443` as HTTPS.
+There are no per-objective spans. The runner maintains one
+**agent activity stream** per slot — an append-only timeline of
+everything the agent's runner observed:
 
-2. **`tshark`** (`decrypt.ts`) — run `tshark -r <pcap> -o
-   tls.keylog_file:<keys> -2 -Y http -T json`. The two-pass mode
-   (`-2`) is required so TLS records reassemble across packet
-   boundaries. We capture stdout with a 15-second timeout.
+- `llm_exchange` — an Anthropic API request/response pair
+- `opaque_http` — a non-Anthropic HTTP exchange
+- `objective_open` — the slot just took ownership of an objective
+- `objective_close` — the slot released it
 
-3. **`parseTsharkJson`** — walk the per-packet JSON, correlate
-   request/response pairs by `tcp.stream` id, assemble
-   `HttpExchange` records. Orphan responses still surface with a
-   synthetic request placeholder so nothing gets silently dropped.
+Objective "traces" are a **time-range view** over this stream —
+the web UI queries `GET /agents/<assignee>/activity?from=<open>&
+to=<close>&kind=llm_exchange` to pull the LLM calls made during
+an objective's lifetime, rather than loading a separately-stored
+per-objective blob.
 
-4. **`extractEntries`** (`anthropic.ts`) — per exchange: if the
-   host matches `(^|\.)anthropic\.com$` and the path is
-   `/v1/messages`, parse into a typed `AnthropicMessagesEntry`
-   (model, max_tokens, system, messages, tools, stop_reason,
-   usage). Everything else becomes an `OpaqueHttpEntry` with
-   headers + body preview.
+Capture runs entirely live: as soon as the MITM proxy finishes
+reassembling an HTTP/1.1 request/response pair, the runner parses
+it, extracts + redacts, wraps it as an `llm_exchange` or
+`opaque_http` activity event, and enqueues it for streaming upload
+via `POST /agents/:callsign/activity`. No per-span buffering, no
+memory accumulation over objective lifetime, no big flush at span
+close.
 
-5. **`redactJson`** (`redact.ts`) — walk the output tree and
-   scrub:
+## The decode pipeline
 
-   - `Authorization`, `x-api-key`, `cookie`, `set-cookie`,
-     `x-anthropic-api-key`, `proxy-authorization` headers (value
-     replaced with `[REDACTED]`)
-   - `sk-ant-...`, `sk-...`, `AKIA...`, `ghp_...`, `xox[baprs]-...`
-     patterns in any string value
+For every HTTP/1.1 exchange the reassembler completes:
 
-6. **`uploadObjectiveTrace`** — `POST /objectives/:id/traces` with
-   the decoded entries. Assignee-only server-side. On failure: log
-   and discard (v1 doesn't retry).
+1. **Incremental parse** via `Http1Reassembler` (reads plaintext
+   chunks as they arrive from the MITM proxy, keeps rolling
+   buffers per TLS session, emits completed request/response
+   pairs in FIFO order).
+2. **Extract Anthropic API shape** via `extractEntries`
+   (`anthropic.ts`). For `POST /v1/messages` on `*.anthropic.com`,
+   parse into a typed `AnthropicMessagesEntry` with `model`,
+   `maxTokens`, `system`, `messages`, `tools`, `stopReason`, and
+   `usage`. Everything else becomes an `OpaqueHttpEntry` with
+   headers + body previews.
+3. **Redact secrets** via `redactJson` (`redact.ts`): strip
+   `Authorization`, `x-api-key`, `cookie`, `set-cookie`,
+   `x-anthropic-api-key`, `proxy-authorization` headers and scrub
+   `sk-ant-…`, `sk-…`, `AKIA…`, `ghp_…`, `xox[baprs]-…` patterns
+   in string values.
+4. **Enqueue** in the `ActivityUploader` — a batched streaming
+   sender that flushes every 50 events OR 64 KB OR 500 ms,
+   whichever comes first. Failures retry with exponential
+   backoff (200 ms → 30 s); the queue is hard-capped at 1000
+   events / 1 MB with oldest-first eviction under sustained
+   broker unreachability.
 
-## Status values
-
-Every decoded span surfaces one of five statuses in the runner log:
-
-| Status | Meaning |
-|---|---|
-| `decoded` | tshark ran, entries were extracted, uploaded OK |
-| `tshark_missing` | tshark not on PATH; nothing uploaded, fallback raw counts logged |
-| `tshark_failed` | tshark exited non-zero (keylog missing, pcap malformed); diagnostic in `error` field |
-| `no_records` | tshark ran cleanly but found nothing HTTP-shaped (not HTTPS traffic, or keys didn't match) |
-| `empty` | no bytes captured during the span |
-
-`tshark_missing` and `no_records` are usually operator-fixable:
-install tshark, or verify `ALL_PROXY` is honored by the child
-process.
+Objective lifecycle markers are emitted directly by the runner
+whenever the objectives tracker's open set changes — the tracker
+diff adds `objective_open` events for new ids and
+`objective_close` events for ids that just left the set. These
+flow through the same uploader as LLM exchanges.
 
 ## Viewing traces
 
 Commanders review uploaded traces in the web UI's **TracePanel**
-on each objective's detail page. The panel:
+on each objective's detail page:
 
-- Fetches `GET /objectives/:id/traces` on mount
-- Renders each trace with model name, token usage (`in=150 out=42
-  cache_hit=100`), and message list
+- Queries `GET /agents/<assignee>/activity?from=<objective.createdAt>&to=<objective.completedAt ?? now>&kind=llm_exchange`
+- Renders each returned LLM exchange with model name, token usage
+  (`in=150 out=42 cache_hit=100`), and message list
 - Expands Anthropic messages into text blocks + tool_use +
   tool_result entries inline
-- Renders opaque HTTP entries with method / host / URL / status +
-  body previews
-- Shows a `TRUNCATED` marker on spans that hit the 10MB cap
 
 The panel is commander-gated in two places:
 
-- **Client**: `ObjectiveDetail.tsx` only mounts `<TracePanel>` when
-  `briefing.authority === 'commander'`
-- **Server**: `GET /objectives/:id/traces` returns 403 to any
+- **Client**: `ObjectiveDetail.tsx` only mounts `<TracePanel>`
+  when `briefing.authority === 'commander'`
+- **Server**: `GET /agents/:callsign/activity` returns 403 to any
   non-commander, including the assignee themselves
 
-The server gate is the real boundary. The client gate is just
-there to avoid fetching a payload the operator can't see anyway.
+The server gate is the real boundary. The client gate is a UX
+optimization.
 
 ## Security posture
 
-Trace capture inherently reveals secrets the agent used during the
-work. control17 mitigates this with a defense-in-depth approach:
+Trace capture inherently reveals secrets the agent used during
+the work. control17 mitigates this with defense in depth:
 
-1. **Redaction at parse time** — secrets are replaced with
-   `[REDACTED]` before the entries leave the runner process. The
-   server never sees the plaintext token.
-2. **Commander-only view** — even if secrets slip past redaction,
-   only commanders can see them. Operators, lieutenants, watchers,
-   and even the assignee who captured the trace all get 403 on
-   `GET /objectives/:id/traces`.
-3. **Keylog scrubbed on runner exit** — the TLS keylog file is
-   `unlink`ed when the runner tears down, on every exit path. Raw
-   TLS secrets never persist on disk past the session.
-4. **`.mcp.json` restored on every exit** — the operator's
-   pre-run MCP config is backed up and restored idempotently,
-   including on crashes and signals, so nothing is left in a
-   partially-modified state.
-5. **Upload is best-effort** — if the upload fails, the runner
-   logs and moves on. It does NOT retry, queue, or persist to
-   disk. The captured trace dies with the runner process.
+1. **MITM is loopback-only and session-scoped.** The proxy binds
+   only to `127.0.0.1` on a random ephemeral port. The CA is
+   generated fresh per runner process, its cert is written with
+   `0o600`, and its private key never touches disk.
+2. **Redaction at parse time.** Secrets are replaced with
+   `[REDACTED]` before entries leave the runner. The server
+   never sees the plaintext token.
+3. **Commander-only view.** Even if secrets slip past redaction,
+   only commanders can see them. Operators, lieutenants,
+   watchers, and even the assignee who captured the trace all
+   get 403 on the GET endpoint.
+4. **CA cert deleted on runner exit.** The cert PEM is unlinked
+   on every exit path (normal, SIGINT, SIGTERM, uncaughtException).
+5. **`.mcp.json` restored on every exit** — the operator's
+   pre-run MCP config is backed up and restored idempotently.
+6. **Upload is best-effort.** If the upload fails, the runner
+   logs and moves on. It does NOT retry, queue, or persist the
+   trace to disk.
 
 ## Opting out
 
 `c17 claude-code --no-trace` disables the entire trace subsystem.
-No proxy relay, no keylog file, no trace host, no env var injection.
-The runner still handles the briefing, SSE, objectives, and bridge
+No proxy relay, no CA generation, no env var injection. The
+runner still handles the briefing, SSE, objectives, and bridge
 IPC normally.
 
 Use `--no-trace` when:
 
-- You're debugging the runner/bridge plumbing and don't want extra
-  moving parts
-- You're running in an environment where you can't install tshark
-  and don't care about decoded traces
-- The agent you're spawning doesn't honor `ALL_PROXY` and the
-  proxy relay just adds latency without capturing anything
+- You're debugging the runner/bridge plumbing and don't want
+  extra moving parts
+- The agent you're spawning doesn't honor `HTTPS_PROXY` and the
+  proxy just adds latency without capturing anything
 
 ## Limitations (v1)
 
-- **Anthropic parser only** — other LLM providers (OpenAI, Gemini,
-  Mistral) land as `opaque_http` entries. Adding parsers is a
-  follow-up.
-- **Linux and macOS only** — the proxy relay is cross-platform, but
-  the `SSLKEYLOGFILE` + `NODE_OPTIONS=--tls-keylog` env-var path is
-  easier on POSIX. Windows is untested.
-- **Node runtime only (for TLS keylog)** — Python / Go / Rust
-  agents can still have their TCP captured by the proxy relay, but
-  the TLS keylog side depends on the runtime respecting
-  `SSLKEYLOGFILE`. Go and Rust don't honor this env var by default,
-  so their flows show up as ciphertext bytes with no decrypted
-  entries.
-- **No retry on upload failure** — a transient network blip
-  between runner and broker at span-close time means the trace is
-  lost.
-- **Soft 10MB cap per span** — past the cap, new chunks are
-  dropped and the snapshot is marked `truncated: true`. Keys are
-  not capped.
-- **tshark dependency** — we shell out to `tshark` for TLS 1.3
-  decryption rather than implementing it in pure Node. A pure-Node
-  TLS 1.3 decryptor would remove the dependency but is out of
-  scope for v1.
+- **HTTP/1.1 only.** HTTP/2 agents (which negotiate `h2` via
+  ALPN) produce no activity events. Adding an HPACK-aware parser
+  is a follow-up. In practice, the Anthropic SDK defaults to
+  HTTP/1.1 for `/v1/messages`, so this is rarely hit.
+- **Anthropic parser only** — other LLM providers (OpenAI,
+  Gemini, Mistral) land as `opaque_http` entries. Adding
+  parsers per provider is straightforward.
+- **Uploader queue cap.** The `ActivityUploader` caps its
+  in-flight queue at 1000 events / 1 MB and evicts oldest-first
+  under sustained broker unreachability. Events dropped here
+  won't appear in the UI.
+- **Cert pinning** — if an agent ships bundled cert pins for
+  Anthropic's real cert chain, our MITM leaf won't match and
+  the handshake will fail. Claude Code v2 does not currently
+  pin; if that changes, we'd need to intercept at a different
+  layer (e.g. LD_PRELOAD against libssl).

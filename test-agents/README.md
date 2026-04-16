@@ -143,4 +143,4 @@ Because everything here is gitignored, `rm -rf test-agents/alpha`
 is fine — the runner restores `.mcp.json` on every exit path, so
 there shouldn't be stale backups to worry about. If something
 crashed mid-run and left a mess, look under `/tmp/c17-runner-*`
-and `/tmp/c17-keylog-*` for runtime artifacts.
+and `/tmp/c17-trace-ca-*` for runtime artifacts.

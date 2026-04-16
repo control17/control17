@@ -35,7 +35,6 @@
     "@control17/sdk": "workspace:*",
     "@preact/signals": "^2.9.0",
     "preact": "^10.29.1",
-    "preact-iso": "^2.11.1",
     "workbox-precaching": "^7.3.0",
     "workbox-window": "^7.3.0"
   },

@@ -59,7 +59,6 @@ import {
 } from './ipc.js';
 import { createObjectivesTracker } from './objectives-tracker.js';
 import { defineTools, handleToolCall } from './tools.js';
-import { decryptSpan } from './trace/decrypt.js';
 import { startTraceHost, type TraceHost } from './trace/host.js';
 
 export class RunnerStartupError extends Error {
@@ -169,13 +168,18 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
   const abortController = new AbortController();
   const socketPath = options.socketPath ?? defaultSocketPath();
 
-  // Optional trace host: SOCKS relay, keylog tailer, per-span buffer.
-  // Skipped entirely when `noTrace` is set — tests and CI use this to
-  // avoid binding ephemeral ports and writing tmp files.
+  // Optional trace host: MITM TLS proxy + per-session CA + streaming
+  // activity uploader. Skipped entirely when `noTrace` is set — tests
+  // and CI use this to avoid binding ephemeral ports and writing tmp
+  // files.
   let traceHost: TraceHost | null = null;
   if (!options.noTrace) {
     try {
-      traceHost = await startTraceHost({ log });
+      traceHost = await startTraceHost({
+        brokerClient,
+        callsign: briefing.callsign,
+        log,
+      });
     } catch (err) {
       log('runner: trace host failed to start — continuing without tracing', {
         error: err instanceof Error ? err.message : String(err),
@@ -251,82 +255,36 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
   });
 
   // Objectives tracker: refresh the open set when SSE objective
-  // events arrive, and emit a `tools/list_changed` notification out
-  // to any connected bridge so the MCP client re-reads tool descriptions.
+  // events arrive. On every diff, emit objective_open/close
+  // events into the agent's activity stream so the server can
+  // slice traces by time range later. Also emit
+  // `tools/list_changed` out to any connected bridge so the MCP
+  // client re-reads tool descriptions.
   const tracker = createObjectivesTracker({
     brokerClient,
     callsign: briefing.callsign,
     log,
     onRefresh: (next) => {
-      // Diff the newly-open set against the previously-open set to
-      // drive the trace host's span lifecycle. Objectives that just
-      // showed up get a new span; objectives that disappeared
-      // (completed, cancelled, reassigned away) finalize their
-      // snapshot. The snapshot is currently discarded — Phase 6
-      // uploads it; for now we just log that a span closed so the
-      // span lifecycle is observable in runner diagnostics.
       if (traceHost !== null) {
         const prevIds = new Set(openObjectives.map((o) => o.id));
         const nextIds = new Set(next.map((o) => o.id));
         for (const id of nextIds) {
           if (!prevIds.has(id)) {
-            traceHost.openSpan(id);
-            log('runner: trace span opened', { objectiveId: id });
+            traceHost.noteObjectiveOpen(id);
+            log('runner: objective open recorded', { objectiveId: id });
           }
         }
         for (const id of prevIds) {
           if (!nextIds.has(id)) {
-            const snap = traceHost.closeSpan(id);
-            log('runner: trace span closed', {
-              objectiveId: id,
-              bytes: snap?.bytesRecorded ?? 0,
-              chunks: snap?.chunks.length ?? 0,
-              keys: snap?.keys.length ?? 0,
-              truncated: snap?.truncated ?? false,
-            });
-            if (snap !== null) {
-              // Decode + upload in the background. Failures are
-              // logged and discarded — we never want trace machinery
-              // to block the agent's work or crash the runner.
-              void (async () => {
-                try {
-                  const decoded = await decryptSpan(snap, { log });
-                  log('runner: trace span decoded', {
-                    objectiveId: id,
-                    status: decoded.status,
-                    entries: decoded.entries.length,
-                    error: decoded.error,
-                  });
-                  // Only upload when we have something — empty or
-                  // failed spans would just be noise on the server.
-                  if (decoded.status === 'decoded' && decoded.entries.length > 0) {
-                    try {
-                      const uploaded = await brokerClient.uploadObjectiveTrace(id, {
-                        spanStart: snap.startedAt,
-                        spanEnd: snap.endedAt,
-                        provider: 'anthropic',
-                        entries: decoded.entries,
-                        truncated: decoded.truncated,
-                      });
-                      log('runner: trace uploaded', {
-                        objectiveId: id,
-                        traceId: uploaded.id,
-                      });
-                    } catch (err) {
-                      log('runner: trace upload failed', {
-                        objectiveId: id,
-                        error: err instanceof Error ? err.message : String(err),
-                      });
-                    }
-                  }
-                } catch (err) {
-                  log('runner: trace decrypt threw', {
-                    objectiveId: id,
-                    error: err instanceof Error ? err.message : String(err),
-                  });
-                }
-              })();
-            }
+            // We can't tell done vs cancelled vs reassigned from
+            // the tracker alone — the objective is just "no longer
+            // open." The server has the terminal state in its
+            // audit log, so consumers that care can join on
+            // objective id. Stamp `done` as the default — it's
+            // the most common outcome and it's a hint, not a
+            // source of truth.
+            traceHost.noteObjectiveClose(id, 'done');
+            log('runner: objective close recorded', { objectiveId: id });
           }
         }
       }
@@ -341,11 +299,12 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
     },
   });
 
-  // Seed spans for whatever the slot already has open at startup so
-  // in-flight agent work is captured from the first byte.
+  // Record open markers for whatever the slot already had at
+  // startup, so in-flight objectives get bracketed in the activity
+  // stream from the first uploaded event.
   if (traceHost !== null) {
     for (const obj of briefing.openObjectives) {
-      traceHost.openSpan(obj.id);
+      traceHost.noteObjectiveOpen(obj.id);
     }
   }
 
@@ -406,7 +365,11 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
       /* already gone */
     }
     // Let the forwarder finish its wind-down (abort already fired).
-    await forwarderPromise.catch(() => {});
+    await forwarderPromise.catch((err) => {
+      log('runner: forwarder wind-down failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     if (traceHost !== null) {
       await traceHost.close().catch((err) => {
         log('runner: trace host close failed', {

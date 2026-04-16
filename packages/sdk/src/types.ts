@@ -111,8 +111,8 @@ export interface HealthResponse {
 
 /**
  * Full squadron-context packet returned from `GET /briefing`. Used by
- * the link and the TUI to initialize themselves with squadron/role/
- * mission/objectives context. The `instructions` string is pre-composed
+ * the runner and the web UI to initialize themselves with squadron/
+ * role/mission/objectives context. The `instructions` string is pre-composed
  * server-side and passed verbatim into the MCP `Server({instructions})`
  * init.
  */
@@ -394,36 +394,96 @@ export interface OpaqueHttpEntry {
 }
 
 /**
- * One complete trace — a collection of HTTP exchanges the runner
- * captured between span open and span close on an objective. The
- * `provider` field identifies which LLM provider dominated the
- * traffic (`anthropic` today; other providers land here in future
- * milestones). `truncated` indicates the per-span byte cap kicked in.
+ * Agent activity event — one entry in the append-only timeline the
+ * runner streams to the server while its agent is alive.
+ *
+ * Activity is the source of truth for "what did this agent actually
+ * do" — LLM calls, opaque HTTP to non-Anthropic endpoints, and
+ * objective lifecycle markers. Objective "traces" are no longer a
+ * separate table; they're a time-range slice of this stream
+ * between `objective_open` and `objective_close` markers for a
+ * given objectiveId.
+ *
+ * Kinds:
+ *   - `objective_open`  — the slot just took ownership of an objective
+ *   - `objective_close` — the slot released it (done/cancelled/reassigned)
+ *   - `llm_exchange`    — a parsed Anthropic API request/response pair
+ *   - `opaque_http`     — a non-Anthropic HTTP exchange captured by the
+ *                         MITM proxy (telemetry, update checks, etc.)
  */
-export interface ObjectiveTrace {
-  id: number;
-  objectiveId: string;
-  spanStart: number;
-  spanEnd: number;
-  provider: string;
-  entries: TraceEntry[];
-  truncated: boolean;
-  createdAt: number;
+export type AgentActivityEvent =
+  | AgentActivityObjectiveOpen
+  | AgentActivityObjectiveClose
+  | AgentActivityLlmExchange
+  | AgentActivityOpaqueHttp;
+
+export type AgentActivityKind = AgentActivityEvent['kind'];
+
+export interface AgentActivityObjectiveOpen {
+  readonly kind: 'objective_open';
+  readonly ts: number;
+  readonly objectiveId: string;
+}
+
+export interface AgentActivityObjectiveClose {
+  readonly kind: 'objective_close';
+  readonly ts: number;
+  readonly objectiveId: string;
+  /** Terminal state that caused the close. */
+  readonly result: 'done' | 'cancelled' | 'reassigned' | 'runner_shutdown';
+}
+
+export interface AgentActivityLlmExchange {
+  readonly kind: 'llm_exchange';
+  /** Start of the request on the MITM wire. */
+  readonly ts: number;
+  /** Milliseconds between request start and response end. */
+  readonly duration: number;
+  readonly entry: AnthropicMessagesEntry;
+}
+
+export interface AgentActivityOpaqueHttp {
+  readonly kind: 'opaque_http';
+  readonly ts: number;
+  readonly duration: number;
+  readonly entry: OpaqueHttpEntry;
 }
 
 /**
- * Upload payload for `POST /objectives/:id/traces`. The runner sends
- * this at span close with whatever decrypted entries tshark was able
- * to recover. The server stamps `id` and `createdAt`.
+ * One activity row as the server stores it — the upload event plus
+ * the server-assigned id + slot callsign.
  */
-export interface UploadObjectiveTraceRequest {
-  spanStart: number;
-  spanEnd: number;
-  provider: string;
-  entries: TraceEntry[];
-  truncated: boolean;
+export interface AgentActivityRow {
+  readonly id: number;
+  readonly slotCallsign: string;
+  readonly event: AgentActivityEvent;
+  readonly createdAt: number;
 }
 
-export interface ListObjectiveTracesResponse {
-  traces: ObjectiveTrace[];
+/**
+ * Upload payload. Runners batch events and POST them in bursts of
+ * up to a few dozen at a time. The server stamps each with an id
+ * and broadcasts to any live SSE subscribers.
+ */
+export interface UploadAgentActivityRequest {
+  readonly events: AgentActivityEvent[];
+}
+
+export interface UploadAgentActivityResponse {
+  readonly accepted: number;
+}
+
+export interface ListAgentActivityQuery {
+  /** Inclusive lower bound on ts (ms since epoch). */
+  readonly from?: number;
+  /** Inclusive upper bound on ts (ms since epoch). */
+  readonly to?: number;
+  /** Filter by kind — single or array. Omit for all kinds. */
+  readonly kind?: AgentActivityKind | AgentActivityKind[];
+  /** Max rows to return. Default 200, max 1000. Newest first. */
+  readonly limit?: number;
+}
+
+export interface ListAgentActivityResponse {
+  readonly activity: AgentActivityRow[];
 }

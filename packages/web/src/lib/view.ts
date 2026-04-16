@@ -1,17 +1,13 @@
 /**
- * Current-view signal — which thread or panel is active in the shell.
+ * View signal — which thread or panel is active in the shell.
  *
- * We use a signal rather than URL routing for v1. URL routing is a
- * nice-to-have for deep links and the back button, but it adds
- * complexity for little benefit in a single-page chat app. Can bolt
- * on preact-iso later if users ask for it.
+ * Signal-based rather than URL routing: single-page chat app with
+ * no deep-link requirement. A router can layer on later if needed.
  *
  * `overview` is the team-overview panel: team name, mission, brief,
- * and the full roster with click-to-DM. The enum used to be named
- * `roster` back when the panel only showed the slot list, but it
- * grew and the external label is "Overview" — so the internal state
- * tracks that. The component is still called `RosterPanel` since its
- * dominant content is the teammate list.
+ * and the full roster with click-to-DM. The component is still
+ * called `RosterPanel` since its dominant content is the teammate
+ * list.
  */
 
 import { signal } from '@preact/signals';
@@ -22,14 +18,15 @@ export type View =
   | { kind: 'overview' }
   | { kind: 'objectives-list' }
   | { kind: 'objective-detail'; id: string }
-  | { kind: 'objective-create' };
+  | { kind: 'objective-create' }
+  | { kind: 'agent-detail'; callsign: string };
 
-export const currentView = signal<View>({ kind: 'thread', key: PRIMARY_THREAD });
+export const view = signal<View>({ kind: 'thread', key: PRIMARY_THREAD });
 
 /**
  * Sidebar drawer open state — only meaningful at narrow widths where
  * the sidebar is an overlay rather than a static column. At md+ the
- * Sidebar ignores this signal entirely. Kept alongside `currentView`
+ * Sidebar ignores this signal entirely. Kept alongside `view`
  * because every view change should also close the drawer — it'd be
  * weird to tap a thread and stay staring at the sidebar on top of it.
  */
@@ -44,7 +41,7 @@ export function closeSidebar(): void {
 }
 
 export function selectThread(key: string): void {
-  currentView.value = { kind: 'thread', key };
+  view.value = { kind: 'thread', key };
   isSidebarOpen.value = false;
 }
 
@@ -53,35 +50,48 @@ export function selectThread(key: string): void {
  * callsign. Used by RosterPanel clicks — the one concrete "start a
  * new conversation" entry point in the SPA. If no messages have
  * been exchanged yet, Sidebar still shows the thread via its
- * currentView-union logic, and Transcript renders a fresh-DM empty
+ * view-union logic, and Transcript renders a fresh-DM empty
  * state until the first message lands.
  */
 export function selectDmWith(callsign: string): void {
-  currentView.value = { kind: 'thread', key: dmThreadKey(callsign) };
+  view.value = { kind: 'thread', key: dmThreadKey(callsign) };
   isSidebarOpen.value = false;
 }
 
 export function selectOverview(): void {
-  currentView.value = { kind: 'overview' };
+  view.value = { kind: 'overview' };
   isSidebarOpen.value = false;
 }
 
 export function selectObjectivesList(): void {
-  currentView.value = { kind: 'objectives-list' };
+  view.value = { kind: 'objectives-list' };
   isSidebarOpen.value = false;
 }
 
 export function selectObjectiveDetail(id: string): void {
-  currentView.value = { kind: 'objective-detail', id };
+  view.value = { kind: 'objective-detail', id };
   isSidebarOpen.value = false;
 }
 
 export function selectObjectiveCreate(): void {
-  currentView.value = { kind: 'objective-create' };
+  view.value = { kind: 'objective-create' };
+  isSidebarOpen.value = false;
+}
+
+/**
+ * Open the agent detail page for a given callsign — metadata +
+ * live activity timeline. Commander-gated server-side, but the
+ * UI also only surfaces entry points (roster rows, objective
+ * assignee fields, DM headers) when the viewer is a commander.
+ * Non-commanders who navigate here anyway see a permission-
+ * denied inline error from the page itself.
+ */
+export function selectAgentDetail(callsign: string): void {
+  view.value = { kind: 'agent-detail', callsign };
   isSidebarOpen.value = false;
 }
 
 export function __resetViewForTests(): void {
-  currentView.value = { kind: 'thread', key: PRIMARY_THREAD };
+  view.value = { kind: 'thread', key: PRIMARY_THREAD };
   isSidebarOpen.value = false;
 }

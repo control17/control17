@@ -33,12 +33,12 @@ import { logout } from '../lib/session.js';
 import { lastReadByThread, unreadCount } from '../lib/unread.js';
 import {
   closeSidebar,
-  currentView,
   isSidebarOpen,
   selectDmWith,
   selectObjectivesList,
   selectOverview,
   selectThread,
+  view,
 } from '../lib/view.js';
 
 export interface SidebarProps {
@@ -65,7 +65,7 @@ function UnreadBadge({ count }: { count: number }) {
 
 export function Sidebar({ viewer }: SidebarProps) {
   // Subscribe to every signal the render reads.
-  const view = currentView.value;
+  const v = view.value;
   const r = roster.value;
   const b = briefing.value;
   // Unread state + the message store itself. Both read here so the
@@ -89,14 +89,12 @@ export function Sidebar({ viewer }: SidebarProps) {
     for (const a of r.connected) onlineByCallsign.set(a.agentId, a.connected);
   }
 
-  const overviewActive = view.kind === 'overview';
-  const teamChatActive = view.kind === 'thread' && view.key === PRIMARY_THREAD;
+  const overviewActive = v.kind === 'overview';
+  const teamChatActive = v.kind === 'thread' && v.key === PRIMARY_THREAD;
   const teamChatUnread = unreadCount(PRIMARY_THREAD, viewer, lastRead, msgMap);
   const drawerOpen = isSidebarOpen.value;
   const objectivesActive =
-    view.kind === 'objectives-list' ||
-    view.kind === 'objective-detail' ||
-    view.kind === 'objective-create';
+    v.kind === 'objectives-list' || v.kind === 'objective-detail' || v.kind === 'objective-create';
   // Viewer's active/blocked objective count — surfaced as a badge next
   // to the sidebar entry so a commander sees how loaded a slot is at
   // a glance, and an operator sees what's on their plate without
@@ -191,7 +189,7 @@ export function Sidebar({ viewer }: SidebarProps) {
           {teammates.map((t) => {
             const connected = onlineByCallsign.get(t.callsign) ?? 0;
             const online = connected > 0;
-            const active = view.kind === 'thread' && view.key === dmThreadKey(t.callsign);
+            const active = v.kind === 'thread' && v.key === dmThreadKey(t.callsign);
             const unread = unreadCount(dmThreadKey(t.callsign), viewer, lastRead, msgMap);
             return (
               <li key={t.callsign}>

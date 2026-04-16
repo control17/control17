@@ -2,46 +2,62 @@
  * TracePanel — commander-only view of captured LLM traces for an
  * objective.
  *
- * Renders as a collapsible section on the ObjectiveDetail screen.
- * Fetches `GET /objectives/:id/traces` on mount, then walks each
- * trace's `entries` array and displays:
+ * In the activity-stream architecture, an "objective trace" is a
+ * **time-range slice** of the assignee's agent activity stream
+ * rather than a separately-stored table. We query
+ * `GET /agents/<assignee>/activity` with:
  *
- *   - Anthropic messages entries: model, token usage, expandable
- *     message list with text / tool_use / tool_result blocks
- *   - Opaque HTTP entries: host + method + URL + status + header /
- *     body previews
+ *   - `from = objective.createdAt`
+ *   - `to   = objective.completedAt ?? now`
+ *   - `kind = llm_exchange`
  *
- * Authority gate is checked in the parent — this component only
- * renders when `briefing.authority === 'commander'`. A double-gate
- * is fine; the server is the real boundary. Ajax errors surface as
- * inline error banners, not thrown.
+ * and render the resulting LLM exchanges.
  *
- * The trace content is already redacted server-side (the runner
- * scrubs secrets at upload time), so we render strings verbatim.
+ * Authority gate is enforced in two places:
+ *   - Client: the parent `ObjectiveDetail` only mounts us when
+ *     `briefing.authority === 'commander'`.
+ *   - Server: `GET /agents/:callsign/activity` returns 403 to any
+ *     non-commander reading another slot.
+ *
+ * The trace content is already redacted at runner upload time.
  */
 
 import type {
+  AgentActivityLlmExchange,
   AnthropicContentBlock,
   AnthropicMessagesEntry,
-  ObjectiveTrace,
-  OpaqueHttpEntry,
-  TraceEntry,
+  Objective,
 } from '@control17/sdk/types';
 import { signal } from '@preact/signals';
 import type { JSX } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { getClient } from '../lib/client.js';
 
-const traces = signal<ObjectiveTrace[]>([]);
+const exchanges = signal<AgentActivityLlmExchange[]>([]);
 const loading = signal(false);
 const loadError = signal<string | null>(null);
 const expanded = signal(true);
 
-async function loadTraces(id: string): Promise<void> {
+async function loadExchanges(objective: Objective): Promise<void> {
   loading.value = true;
   loadError.value = null;
   try {
-    traces.value = await getClient().listObjectiveTraces(id);
+    // `completedAt` is set iff status === 'done'. For cancelled or
+    // still-active objectives we widen the upper bound to "now"
+    // so recent activity lands in the view.
+    const to = objective.completedAt ?? Date.now();
+    const rows = await getClient().listAgentActivity(objective.assignee, {
+      from: objective.createdAt,
+      to,
+      kind: 'llm_exchange',
+      limit: 500,
+    });
+    // The server returns newest-first; we want to render
+    // oldest-first so the conversation reads top-down.
+    const ordered = [...rows].reverse();
+    exchanges.value = ordered
+      .map((row) => row.event)
+      .filter((ev): ev is AgentActivityLlmExchange => ev.kind === 'llm_exchange');
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -49,15 +65,19 @@ async function loadTraces(id: string): Promise<void> {
   }
 }
 
-export function TracePanel({ objectiveId }: { objectiveId: string }): JSX.Element {
-  const list = traces.value;
+export interface TracePanelProps {
+  objective: Objective;
+}
+
+export function TracePanel({ objective }: TracePanelProps): JSX.Element {
+  const list = exchanges.value;
   const isLoading = loading.value;
   const err = loadError.value;
   const isOpen = expanded.value;
 
   useEffect(() => {
-    void loadTraces(objectiveId);
-  }, [objectiveId]);
+    void loadExchanges(objective);
+  }, [objective.id, objective.completedAt]);
 
   const header = (
     <button
@@ -67,7 +87,7 @@ export function TracePanel({ objectiveId }: { objectiveId: string }): JSX.Elemen
       }}
       class="w-full flex items-center justify-between c17-label text-brand-primary hover:text-brand-primary-bright"
     >
-      <span>━━ Captured traces ({list.length})</span>
+      <span>━━ LLM exchanges ({list.length})</span>
       <span class="text-base">{isOpen ? '−' : '+'}</span>
     </button>
   );
@@ -77,7 +97,7 @@ export function TracePanel({ objectiveId }: { objectiveId: string }): JSX.Elemen
       {header}
       {isOpen && (
         <div class="space-y-2">
-          {isLoading && <div class="c17-label text-brand-subtle">━━ Loading traces…</div>}
+          {isLoading && <div class="c17-label text-brand-subtle">━━ Loading exchanges…</div>}
           {err !== null && (
             <div class="c17-label !text-brand-err border border-brand-err/40 bg-brand-err/10 rounded-sm px-3 py-2">
               ◆ {err}
@@ -85,11 +105,11 @@ export function TracePanel({ objectiveId }: { objectiveId: string }): JSX.Elemen
           )}
           {!isLoading && err === null && list.length === 0 && (
             <div class="text-xs text-brand-subtle font-medium italic">
-              No traces captured for this objective
+              No LLM exchanges captured during this objective
             </div>
           )}
-          {list.map((trace) => (
-            <TraceRow key={trace.id} trace={trace} />
+          {list.map((exchange, i) => (
+            <ExchangeRow key={`${exchange.ts}-${i}`} exchange={exchange} />
           ))}
         </div>
       )}
@@ -97,33 +117,23 @@ export function TracePanel({ objectiveId }: { objectiveId: string }): JSX.Elemen
   );
 }
 
-function TraceRow({ trace }: { trace: ObjectiveTrace }): JSX.Element {
-  const duration = trace.spanEnd - trace.spanStart;
+function ExchangeRow({ exchange }: { exchange: AgentActivityLlmExchange }): JSX.Element {
   return (
     <div class="border border-brand-border-subtle rounded-sm bg-brand-surface/40 p-3">
       <div class="flex items-center justify-between text-xs font-mono font-medium text-brand-muted">
         <span>
-          trace #{trace.id} · {trace.provider} · {duration}ms · {trace.entries.length} entries
+          {new Date(exchange.ts).toISOString().replace('T', ' ').slice(0, 19)} · {exchange.duration}
+          ms
         </span>
-        {trace.truncated && <span class="c17-label text-brand-warn">◆ TRUNCATED</span>}
       </div>
-      <div class="mt-2 space-y-2">
-        {trace.entries.map((entry, i) => (
-          <EntryRow key={`${trace.id}-${i}`} entry={entry} />
-        ))}
+      <div class="mt-2">
+        <AnthropicEntryView entry={exchange.entry} />
       </div>
     </div>
   );
 }
 
-function EntryRow({ entry }: { entry: TraceEntry }): JSX.Element {
-  if (entry.kind === 'anthropic_messages') {
-    return <AnthropicEntry entry={entry} />;
-  }
-  return <OpaqueEntry entry={entry} />;
-}
-
-function AnthropicEntry({ entry }: { entry: AnthropicMessagesEntry }): JSX.Element {
+function AnthropicEntryView({ entry }: { entry: AnthropicMessagesEntry }): JSX.Element {
   const usage = entry.response?.usage;
   return (
     <div class="border-l-2 border-brand-primary pl-2">
@@ -229,39 +239,6 @@ function ContentBlock({ block }: { block: AnthropicContentBlock }): JSX.Element 
   return (
     <div class="text-xs text-brand-muted italic">
       [unknown block: {JSON.stringify(block.raw).slice(0, 60)}…]
-    </div>
-  );
-}
-
-function OpaqueEntry({ entry }: { entry: OpaqueHttpEntry }): JSX.Element {
-  return (
-    <div class="border-l-2 border-brand-muted pl-2">
-      <div class="text-xs font-mono">
-        <span class="text-brand-text">{entry.method}</span>{' '}
-        <span class="text-brand-muted">{entry.host}</span>
-        <span class="text-brand-text">{entry.url}</span>
-        {entry.status !== null && <span class="ml-2 text-brand-primary">{entry.status}</span>}
-      </div>
-      {entry.requestBodyPreview && (
-        <details class="mt-1">
-          <summary class="text-xs text-brand-subtle font-medium cursor-pointer">
-            request body
-          </summary>
-          <pre class="text-xs text-brand-muted whitespace-pre-wrap font-mono font-medium mt-1">
-            {entry.requestBodyPreview}
-          </pre>
-        </details>
-      )}
-      {entry.responseBodyPreview && (
-        <details class="mt-1">
-          <summary class="text-xs text-brand-subtle font-medium cursor-pointer">
-            response body
-          </summary>
-          <pre class="text-xs text-brand-muted whitespace-pre-wrap font-mono font-medium mt-1">
-            {entry.responseBodyPreview}
-          </pre>
-        </details>
-      )}
     </div>
   );
 }

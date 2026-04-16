@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { Broker } from '@control17/core';
 import type { Role, Squadron } from '@control17/sdk/types';
 import { serve } from '@hono/node-server';
+import { type AgentActivityStore, createSqliteAgentActivityStore } from './agent-activity.js';
 import { createApp } from './app.js';
 import { type DatabaseSyncInstance, openDatabase } from './db.js';
 import { createHttp2ServerFactory } from './https/server.js';
@@ -49,6 +50,10 @@ import {
 import { SqliteEventLog } from './sqlite-event-log.js';
 import { SERVER_VERSION } from './version.js';
 
+export {
+  type AgentActivityStore,
+  createSqliteAgentActivityStore,
+} from './agent-activity.js';
 export { composeBriefing } from './briefing.js';
 export { HttpsConfigError, type LoadedCert } from './https/store.js';
 export {
@@ -202,6 +207,7 @@ export async function runServer(options: RunServerOptions): Promise<RunningServe
   const sessions = new SessionStore(db);
   const pushStore = new PushSubscriptionStore(db);
   const objectivesStore = createSqliteObjectivesStore(db);
+  const agentActivityStore: AgentActivityStore = createSqliteAgentActivityStore(db);
   sessions.purgeExpired();
 
   // VAPID lifecycle: either the caller provided keys (from the
@@ -318,6 +324,7 @@ export async function runServer(options: RunServerOptions): Promise<RunningServe
     squadron: options.squadron,
     roles: options.roles,
     objectives: objectivesStore,
+    agentActivity: agentActivityStore,
     version: SERVER_VERSION,
     logger: log,
     secureCookies,
