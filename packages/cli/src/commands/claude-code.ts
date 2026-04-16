@@ -232,17 +232,38 @@ export async function runClaudeCodeCommand(input: ClaudeCodeCommandInput): Promi
   // twice. User-supplied args still end up on the command line,
   // just after ours.
   const injectedArgs: string[] = [];
+  const injectedSummary: string[] = [];
   const userPassedSkipPerms = input.claudeArgs.includes('--dangerously-skip-permissions');
   const userPassedDevChannels = input.claudeArgs.includes(
     '--dangerously-load-development-channels',
   );
   if (!userPassedSkipPerms) {
     injectedArgs.push('--dangerously-skip-permissions');
+    injectedSummary.push('--dangerously-skip-permissions');
   }
   if (!userPassedDevChannels) {
     injectedArgs.push('--dangerously-load-development-channels', 'server:c17');
+    injectedSummary.push('--dangerously-load-development-channels server:c17');
   }
   const finalClaudeArgs = [...injectedArgs, ...input.claudeArgs];
+
+  // Human-readable posture banner on stderr — stdout belongs to claude.
+  // The two auto-injected flags meaningfully relax claude's default
+  // per-call permission behavior. Dan's 2026-04-16 audit Part-3 item #5
+  // flagged this as a "posture users need to notice on turn 1" — the
+  // structured JSON log on its own doesn't make that visible enough,
+  // because an operator skimming a fresh session sees the TUI first
+  // and structured logs look like plumbing noise.
+  //
+  // Emitted only when we actually injected something; if the operator
+  // passed the flags themselves, no banner fires (they already know).
+  if (injectedSummary.length > 0) {
+    const banner =
+      `\nc17: auto-injected into claude invocation (squadron authority is the access control):\n` +
+      injectedSummary.map((f) => `    ${f}\n`).join('') +
+      `      (pass either flag yourself to suppress this line)\n\n`;
+    process.stderr.write(banner);
+  }
 
   log('claude-code: spawning claude', {
     binary: claudeBinary,
