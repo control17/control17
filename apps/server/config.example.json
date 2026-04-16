@@ -31,13 +31,13 @@
       "token": "c17_dev_replace_me_with_a_real_secret"
     },
     {
-      "callsign": "LT-ONE",
+      "callsign": "lead",
       "role": "operator",
       "authority": "lieutenant",
       "token": "c17_dev_another_real_secret"
     },
-    { "callsign": "ALPHA-1", "role": "implementer", "token": "c17_dev_another_real_secret" },
-    { "callsign": "SIERRA", "role": "reviewer", "token": "c17_dev_one_more_real_secret" }
+    { "callsign": "builder", "role": "implementer", "token": "c17_dev_another_real_secret" },
+    { "callsign": "scout", "role": "reviewer", "token": "c17_dev_one_more_real_secret" }
   ],
   "https": {
     "mode": "off",

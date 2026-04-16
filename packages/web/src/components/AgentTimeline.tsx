@@ -42,6 +42,7 @@ import {
   agentActivityRows,
   loadOlderAgentActivity,
 } from '../lib/agent-activity.js';
+import { highlightXmlTags } from '../lib/channel-highlight.js';
 import { selectObjectiveDetail } from '../lib/view.js';
 
 type KindFilter = Record<AgentActivityEvent['kind'], boolean>;
@@ -284,6 +285,15 @@ function MessageBlock({ role, content }: { role: string; content: AnthropicConte
 
 function ContentBlock({ block }: { block: AnthropicContentBlock }) {
   if (block.type === 'text') {
+    const highlighted = highlightXmlTags(block.text);
+    if (highlighted !== null) {
+      return (
+        <pre
+          class="text-xs text-brand-text whitespace-pre-wrap font-mono"
+          dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
+      );
+    }
     return <pre class="text-xs text-brand-text whitespace-pre-wrap font-mono">{block.text}</pre>;
   }
   if (block.type === 'tool_use') {

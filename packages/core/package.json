@@ -1,7 +1,7 @@
 {
   "name": "@control17/core",
   "version": "0.3.1",
-  "description": "Runtime-agnostic broker logic for control17 — MCP-based agent control plane.",
+  "description": "Runtime-agnostic broker logic for control17 — agent registry, push fanout, SSE, event log.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
   "homepage": "https://github.com/control17/control17#readme",

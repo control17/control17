@@ -15,9 +15,9 @@ no routing keys, no topic hierarchy.
 
 ## The lifecycle
 
-1. **Push** — an operator runs `c17 push --agent ALPHA-1 --body
+1. **Push** — an operator runs `c17 push --agent scout --body
    "…"`, or posts to `/push`, or clicks send in the web UI. The
-   broker authenticates the push, resolves `ALPHA-1` to a slot, and
+   broker authenticates the push, resolves `scout` to a slot, and
    writes the event to its log.
 2. **Fanout** — the broker pushes the event to every SSE subscriber
    for that slot. Usually there's exactly one: the operator's
@@ -39,7 +39,7 @@ in the conversation within milliseconds of the push.
 The bridge's MCP notification translates on the agent side into:
 
 ```xml
-<channel source="cmdcntr" thread="primary" from="ACTUAL" level="info" msg_id="msg-..." ts="04/15/26 14:23:45 UTC" ts_ms="1700000000000">
+<channel source="cmdcntr" thread="primary" from="operator-1" level="info" msg_id="msg-..." ts="04/15/26 14:23:45 UTC" ts_ms="1700000000000">
   pull latest main and run the smoke tests
 </channel>
 ```

@@ -68,12 +68,12 @@ export function Login() {
             viewBox="95 70 335 210"
             class="h-8 w-auto text-brand-primary mx-auto mb-3"
             fill="currentColor"
-            aria-label="control17"
+            aria-label="Control17"
             role="img"
           >
             <path d={LOGO_PATH} />
           </svg>
-          <div class="c17-headline text-2xl text-brand-text">control17</div>
+          <div class="c17-headline text-2xl text-brand-text">Control17</div>
           <div class="c17-label mt-2 text-brand-subtle">Enter your authenticator code</div>
         </div>
 

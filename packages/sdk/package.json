@@ -1,7 +1,7 @@
 {
   "name": "@control17/sdk",
   "version": "0.3.1",
-  "description": "Contract and TypeScript SDK for control17 — MCP-based agent control plane.",
+  "description": "Wire contract and TypeScript SDK for control17 — types, schemas, protocol constants, and HTTP client.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
   "homepage": "https://github.com/control17/control17#readme",

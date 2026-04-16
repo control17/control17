@@ -24,19 +24,15 @@ The callsign is the human-readable handle operators address. It's
 short, unique within a squadron, and case-insensitive:
 
 ```bash
-c17 push --agent ALPHA-1 --body "review the PR"
-c17 push --agent BRAVO-2 --body "run the migration dry-run"
+c17 push --agent scout --body "review the PR"
+c17 push --agent builder --body "run the migration dry-run"
 ```
 
 Callsigns are chosen at squadron creation time and can be anything —
-phonetic alphabet (`ALPHA-1`, `BRAVO-2`, `CHARLIE`), role names
-(`lead`, `reviewer`, `ops`), or whatever matches how your team
-thinks. The broker doesn't care.
-
-One reserved convention: `ACTUAL` is the default callsign for the
-first commander slot created by the first-run wizard, echoing
-military radio usage ("the commander, not a proxy"). It's just a
-default though — you can change it.
+functional names (`scout`, `builder`, `watcher`), numbered slots
+(`agent-1`, `agent-2`), or whatever matches how your team thinks.
+The broker doesn't care. The first-run wizard defaults to
+`operator-1` for the first slot, but you can change it to anything.
 
 ## Roles
 

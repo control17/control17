@@ -122,6 +122,36 @@ pre {
   font-weight: 500;
 }
 
+/* ─── Channel tag syntax coloring — renders <channel> XML tags
+       with colored brackets, tag name, attributes, and body so they
+       read like syntax-highlighted markup in the transcript ──────── */
+.c17-channel-tag {
+  display: inline;
+  font-size: 0.92em;
+}
+.c17-ch-bracket {
+  color: var(--c17-text-subtle);
+  font-weight: 600;
+}
+.c17-ch-name {
+  color: var(--c17-primary-bright);
+  font-weight: 600;
+}
+.c17-ch-attr {
+  color: var(--c17-coyote);
+  font-weight: 500;
+}
+.c17-ch-val {
+  color: var(--c17-coyote-bright);
+  font-weight: 500;
+}
+.c17-ch-body {
+  color: var(--c17-text);
+  font-weight: 500;
+  display: block;
+  padding-left: 1.5em;
+}
+
 /* ─── Themed scrollbars — match brand palette so overflow regions
        (transcript, sidebar, roster) blend into the dark surface
        instead of showing the OS default light track ───────────────── */

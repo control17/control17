@@ -39,7 +39,7 @@ From the CLI:
 
 ```bash
 c17 objectives create \
-  --assignee ALPHA-1 \
+  --assignee builder \
   --title "Pull main and run smoke tests" \
   --outcome "Smoke tests green on latest main" \
   --body "See CI failure on #1234 for context"
@@ -86,7 +86,7 @@ the runner, which makes the HTTP call against `/objectives/*`.
 Commanders can reassign an open objective to a different slot:
 
 ```bash
-c17 objectives reassign --id obj-xxx --to BRAVO-2 --note "alpha-1 is OOO"
+c17 objectives reassign --id obj-xxx --to scout --note "builder is tied up"
 ```
 
 Reassignment:

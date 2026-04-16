@@ -400,13 +400,13 @@ without client-side echo logic.
 
 ## How a chat push flows
 
-1. Operator calls `c17 push --agent ALPHA-1 --body "ci failed"` (or
+1. Operator calls `c17 push --agent scout --body "ci failed"` (or
    posts `/push` directly, or clicks send in the web UI).
 2. Broker validates against `@control17/sdk/schemas`, writes to the
-   event log, and fans out the message to `ALPHA-1`'s SSE subscribers
+   event log, and fans out the message to `scout`'s SSE subscribers
    (plus the sender's own agent, if registered).
 3. The operator's `c17 claude-code` runner is subscribed on
-   `ALPHA-1`'s stream. The forwarder receives the SSE frame,
+   `scout`'s stream. The forwarder receives the SSE frame,
    suppresses self-echoes, and sends an `mcp_notification` IPC frame
    to the bridge.
 4. The bridge emits the frame as a real

@@ -1,7 +1,7 @@
 {
   "name": "@control17/cli",
   "version": "0.3.1",
-  "description": "Operator CLI for control17 — push events to running agents, list agents, run a local broker.",
+  "description": "Operator CLI for control17 — wrap agents with c17 claude-code, push objectives, manage the squadron.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",
   "homepage": "https://github.com/control17/control17#readme",

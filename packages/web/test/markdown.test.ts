@@ -33,4 +33,34 @@ describe('renderInlineMarkdown', () => {
   it('sanitizes then formats — no HTML injection via bold markers', () => {
     expect(renderInlineMarkdown('**<b>x</b>**')).toBe('<strong>&lt;b&gt;x&lt;/b&gt;</strong>');
   });
+
+  it('renders channel tags with syntax coloring', () => {
+    const input = '<channel source="cmdcntr" from="scout">hello</channel>';
+    const result = renderInlineMarkdown(input);
+    expect(result).toContain('class="c17-channel-tag"');
+    expect(result).toContain('class="c17-ch-name">channel</span>');
+    expect(result).toContain('class="c17-ch-attr">source</span>');
+    expect(result).toContain('class="c17-ch-val">&quot;cmdcntr&quot;</span>');
+    expect(result).toContain('class="c17-ch-body">hello</div>');
+    expect(result).not.toContain('&lt;channel');
+  });
+
+  it('renders realistic multiline channel tags with many attributes', () => {
+    const input =
+      '<channel source="c17" msg_id="13881ea1" level="info" ts="04/15/26 17:47:58 UTC" ts_ms="1776275278880" thread="dm" from="przy" target="test-agent-1">\nread you loud and clear! Thank you!\n</channel>';
+    const result = renderInlineMarkdown(input);
+    expect(result).toContain('class="c17-channel-tag"');
+    expect(result).toContain('class="c17-ch-attr">source</span>');
+    expect(result).toContain('class="c17-ch-attr">from</span>');
+    expect(result).toContain('class="c17-ch-val">&quot;przy&quot;</span>');
+    expect(result).toContain('class="c17-ch-body">');
+    expect(result).toContain('read you loud and clear');
+  });
+
+  it('leaves non-channel HTML tags escaped', () => {
+    const input = '<div>not a channel</div>';
+    const result = renderInlineMarkdown(input);
+    expect(result).toContain('&lt;div&gt;');
+    expect(result).not.toContain('c17-channel-tag');
+  });
 });
