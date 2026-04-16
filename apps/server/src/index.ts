@@ -168,6 +168,7 @@ async function main(): Promise<void> {
     squadron,
     roles,
     https: httpsFromConfig,
+    webPush,
   } = await loadOrCreateSquadronConfig(configPath);
 
   // Auto-flip: if the user didn't explicitly configure HTTPS in the
@@ -195,6 +196,7 @@ async function main(): Promise<void> {
     squadron,
     roles,
     https,
+    webPush,
     configPath,
     configDir: dirname(configPath),
     port,
