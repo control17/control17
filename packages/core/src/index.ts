@@ -29,5 +29,20 @@ export {
   type AgentState,
   type Subscriber,
 } from './registry.js';
+export {
+  InMemorySessionStore,
+  type InMemorySessionStoreOptions,
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_MS,
+  type SessionRow,
+  type SessionStore,
+} from './session-store.js';
+export {
+  InMemoryPushSubscriptionStore,
+  type InMemoryPushSubscriptionStoreOptions,
+  type PushSubscriptionInput,
+  type PushSubscriptionRow,
+  type PushSubscriptionStore,
+} from './push-subscription-store.js';
 
 export { CORE_VERSION } from './version.js';
