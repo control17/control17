@@ -28,6 +28,7 @@ import { runEnrollCommand } from './commands/enroll.js';
 import { UsageError } from './commands/errors.js';
 import { runObjectivesCommand } from './commands/objectives.js';
 import { type PushCommandInput, runPushCommand } from './commands/push.js';
+import { QuickstartError, runQuickstartCommand } from './commands/quickstart.js';
 import { runRosterCommand } from './commands/roster.js';
 import { runServeCommand } from './commands/serve.js';
 import { runSetupCommand } from './commands/setup.js';
@@ -38,6 +39,7 @@ const USAGE = `control17 cli v${CLI_VERSION}
 usage:
   c17 setup       [--config-path <path>]            first-run wizard (squadron + slots + TOTP)
   c17 enroll      --slot <callsign> [--config-path <path>]   (re-)enroll a slot for web UI login
+  c17 quickstart  [--skip-browser] [--assignee <callsign>]   seed a demo objective + open the web UI
   c17 claude-code [--no-trace] [--doctor] [--skip-doctor] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
   c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
   c17 roster                        list slots, authority, and connection state
@@ -99,6 +101,9 @@ async function main(): Promise<void> {
       return;
     case 'enroll':
       await handleEnroll(rest);
+      return;
+    case 'quickstart':
+      await handleQuickstart(rest);
       return;
     case 'push':
       await handlePush(rest);
@@ -212,6 +217,41 @@ async function handlePush(args: string[]): Promise<void> {
     const output = await runPushCommand(input, client);
     log(output);
   } catch (err) {
+    if (err instanceof UsageError) fail(err.message, 2);
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleQuickstart(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    url: { type: 'string' },
+    token: { type: 'string' },
+    'skip-browser': { type: 'boolean' },
+    assignee: { type: 'string' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+
+  try {
+    const client = makeClient(values);
+    const url =
+      getString(values, 'url') ?? process.env[ENV.url] ?? `http://127.0.0.1:${DEFAULT_PORT}`;
+    const token = getString(values, 'token') ?? process.env[ENV.token] ?? '';
+    await runQuickstartCommand(
+      {
+        url,
+        token,
+        skipBrowser: getBoolean(values, 'skip-browser'),
+        assignee: getString(values, 'assignee'),
+      },
+      client,
+      (line) => log(line),
+    );
+  } catch (err) {
+    if (err instanceof QuickstartError) fail(err.message);
     if (err instanceof UsageError) fail(err.message, 2);
     fail(err instanceof Error ? err.message : String(err));
   }
