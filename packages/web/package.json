@@ -1,6 +1,6 @@
 {
   "name": "@control17/web",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Browser-based web UI for control17 — team chat, roster, and notifications served by the self-hosted broker.",
   "license": "Apache-2.0",
   "author": "Andrew Przybilla <andrewprzybilla@gmail.com>",

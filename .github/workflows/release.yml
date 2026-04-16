@@ -30,6 +30,26 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Stamp version from tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "Stamping version $TAG_VERSION from tag $GITHUB_REF_NAME"
+          node -e "
+            const fs = require('fs');
+            const glob = require('path');
+            const files = [
+              'package.json',
+              ...fs.readdirSync('packages', {withFileTypes:true}).filter(d=>d.isDirectory()).map(d=>'packages/'+d.name+'/package.json'),
+              ...fs.readdirSync('apps', {withFileTypes:true}).filter(d=>d.isDirectory()).map(d=>'apps/'+d.name+'/package.json'),
+            ].filter(f => fs.existsSync(f));
+            for (const f of files) {
+              const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
+              pkg.version = '${TAG_VERSION}';
+              fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + '\n');
+              console.log('  ' + f + ' → ' + pkg.version);
+            }
+          "
+
       - run: pnpm lint
 
       - run: pnpm build
@@ -37,16 +57,6 @@ jobs:
       - run: pnpm typecheck
 
       - run: pnpm test
-
-      - name: Verify tag matches package versions
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          ROOT_VERSION="$(node -p "require('./package.json').version")"
-          if [ "$TAG_VERSION" != "$ROOT_VERSION" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match root package version $ROOT_VERSION"
-            exit 1
-          fi
-          echo "tag $GITHUB_REF_NAME matches version $ROOT_VERSION"
 
       - name: Publish to npm
         run: pnpm -r publish --access public --no-git-checks
