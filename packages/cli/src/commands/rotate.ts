@@ -69,8 +69,7 @@ export async function runRotateCommand(
   } catch (err) {
     if (err instanceof server.ConfigNotFoundError) {
       throw new UsageError(
-        `rotate: no config file at ${configPath}\n` +
-          '  Run `c17 setup` first to create one.',
+        `rotate: no config file at ${configPath}\n` + '  Run `c17 setup` first to create one.',
       );
     }
     if (err instanceof server.SlotLoadError) {

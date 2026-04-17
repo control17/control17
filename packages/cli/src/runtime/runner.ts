@@ -171,9 +171,7 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
       ? `\n  hint: is \`c17 serve\` running at ${options.url}? ` +
         `(start it, or pass --url to point elsewhere)`
       : '';
-    throw new RunnerStartupError(
-      `briefing failed against ${options.url}: ${errMsg}${hint}`,
-    );
+    throw new RunnerStartupError(`briefing failed against ${options.url}: ${errMsg}${hint}`);
   }
 
   // Live open-objectives snapshot — mutated as the objectives tracker

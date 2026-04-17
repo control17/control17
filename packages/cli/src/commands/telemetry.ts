@@ -268,7 +268,9 @@ export async function runTelemetryCommand(
       log(`  state file: ${path}`);
       log('  will send at most 2 events per enable-session (first boot, first mission complete).');
       log('  `c17 telemetry preview` shows the exact bytes that would be sent.');
-      log('  `c17 telemetry disable` stops sends; `c17 telemetry rotate` mints a fresh install-id.');
+      log(
+        '  `c17 telemetry disable` stops sends; `c17 telemetry rotate` mints a fresh install-id.',
+      );
       return;
     }
     case 'disable': {
@@ -280,7 +282,9 @@ export async function runTelemetryCommand(
       state.enabled = false;
       saveTelemetryState(state, path);
       log('c17 telemetry: disabled. No further events will be sent.');
-      log('  (install-id retained on disk; `c17 telemetry rotate` mints a fresh one if you want to reset.)');
+      log(
+        '  (install-id retained on disk; `c17 telemetry rotate` mints a fresh one if you want to reset.)',
+      );
       return;
     }
     case 'rotate': {

@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   decryptField,
-  encryptField,
   ENCRYPTED_FIELD_PREFIX,
   EncryptedFieldError,
+  encryptField,
   KekResolutionError,
   resolveKek,
   testKek,

@@ -57,6 +57,12 @@ export {
 export { composeBriefing } from './briefing.js';
 export { HttpsConfigError, type LoadedCert } from './https/store.js';
 export {
+  ENCRYPTED_FIELD_PREFIX,
+  EncryptedFieldError,
+  KekResolutionError,
+  resolveKek,
+} from './kek.js';
+export {
   createSqliteObjectivesStore,
   ObjectivesError,
   type ObjectivesStore,
@@ -76,19 +82,13 @@ export {
   type LoadedSlot,
   loadSquadronConfigFromFile,
   rotateSlotToken,
-  setKek,
   SlotLoadError,
   type SlotStore,
   type SquadronConfig,
+  setKek,
   teammatesFromStore,
   writeSquadronConfig,
 } from './slots.js';
-export {
-  EncryptedFieldError,
-  ENCRYPTED_FIELD_PREFIX,
-  KekResolutionError,
-  resolveKek,
-} from './kek.js';
 export {
   currentCode as currentTotpCode,
   generateSecret as generateTotpSecret,

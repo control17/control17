@@ -12,8 +12,8 @@ import {
   hashToken,
   loadSquadronConfigFromFile,
   rotateSlotToken,
-  setKek,
   SlotLoadError,
+  setKek,
   TOKEN_HASH_PREFIX,
   writeSquadronConfig,
 } from '../src/slots.js';
@@ -90,22 +90,17 @@ describe('rotateSlotToken', () => {
   function seedConfig(): { path: string; originalHashes: Record<string, string> } {
     const dir = tmpDir();
     const path = join(dir, 'control17.json');
-    writeSquadronConfig(
-      path,
-      SAMPLE_SQUADRON,
-      SAMPLE_ROLES,
-      [
-        { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'original-a' },
-        { callsign: 'LT-ONE', role: 'operator', authority: 'lieutenant', token: 'original-b' },
-        {
-          callsign: 'ALPHA-1',
-          role: 'implementer',
-          token: 'original-c',
-          totpSecret: 'ABCDEFGHIJKLMNOP',
-          totpLastCounter: 42,
-        },
-      ],
-    );
+    writeSquadronConfig(path, SAMPLE_SQUADRON, SAMPLE_ROLES, [
+      { callsign: 'ACTUAL', role: 'operator', authority: 'commander', token: 'original-a' },
+      { callsign: 'LT-ONE', role: 'operator', authority: 'lieutenant', token: 'original-b' },
+      {
+        callsign: 'ALPHA-1',
+        role: 'implementer',
+        token: 'original-c',
+        totpSecret: 'ABCDEFGHIJKLMNOP',
+        totpLastCounter: 42,
+      },
+    ]);
     return {
       path,
       originalHashes: {

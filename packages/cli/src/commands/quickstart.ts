@@ -41,9 +41,9 @@ const DEMO_OUTCOME =
   'surprising or unusual. Read files; do not run the code.';
 const DEMO_BODY =
   'This is the demo objective seeded by `c17 quickstart`. It exists to ' +
-  "give you something to execute on turn 1 so you can see the whole " +
-  "flow end-to-end: trace capture, objective tracking, web UI rendering. " +
-  "You can cancel or reassign it at any time; it is not load-bearing.";
+  'give you something to execute on turn 1 so you can see the whole ' +
+  'flow end-to-end: trace capture, objective tracking, web UI rendering. ' +
+  'You can cancel or reassign it at any time; it is not load-bearing.';
 
 export interface QuickstartCommandInput {
   url: string;
@@ -158,7 +158,9 @@ export async function runQuickstartCommand(
   log('');
   log('c17 quickstart — ready.');
   log('');
-  log(`  squadron  ${rosterResp.teammates[0]?.callsign ?? '?'} (and ${rosterResp.teammates.length - 1} more)`);
+  log(
+    `  squadron  ${rosterResp.teammates[0]?.callsign ?? '?'} (and ${rosterResp.teammates.length - 1} more)`,
+  );
   log(`  broker    ${input.url} (ON NET)`);
   log(`  assignee  ${assignee}`);
   log(`  demo      ${objectiveId} ${created ? '(created)' : '(already seeded; reusing)'}`);
