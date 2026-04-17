@@ -59,73 +59,67 @@ function percentile(sorted: readonly number[], p: number): number {
 }
 
 describe('fanout load harness', () => {
-  it(
-    'delivers to 100 subscribers across 100 broadcasts with p99 < 50ms in-process',
-    async () => {
-      const eventLog = new InMemoryEventLog();
-      let idCounter = 0;
-      const broker = new Broker({
-        eventLog,
-        idFactory: () => `msg-${++idCounter}`,
+  it('delivers to 100 subscribers across 100 broadcasts with p99 < 50ms in-process', async () => {
+    const eventLog = new InMemoryEventLog();
+    let idCounter = 0;
+    const broker = new Broker({
+      eventLog,
+      idFactory: () => `msg-${++idCounter}`,
+    });
+
+    // Each message carries its push-start timestamp in `data.t0`
+    // so the subscriber can compute precise per-delivery latency
+    // without relying on external clocks.
+    const latencies: number[] = [];
+
+    for (let i = 0; i < SUBSCRIBER_COUNT; i++) {
+      const callsign = `slot-${i.toString().padStart(3, '0')}`;
+      const isSlow = i === SLOW_SUBSCRIBER_INDEX;
+      broker.subscribe(callsign, async (message) => {
+        const now = performance.now();
+        const t0 = Number((message.data as { t0?: number } | undefined)?.t0 ?? Number.NaN);
+        if (Number.isFinite(t0)) {
+          latencies.push(now - t0);
+        }
+        if (isSlow) {
+          await new Promise<void>((resolve) => setTimeout(resolve, SLOW_SUBSCRIBER_DELAY_MS));
+        }
       });
+    }
 
-      // Each message carries its push-start timestamp in `data.t0`
-      // so the subscriber can compute precise per-delivery latency
-      // without relying on external clocks.
-      const latencies: number[] = [];
+    // Push MESSAGE_COUNT broadcasts back-to-back. `broker.push`
+    // awaits full fanout before resolving (including the slow
+    // subscriber's 20ms sleep) — so broadcasts run sequentially
+    // at this layer. That's fine for the harness purpose: we want
+    // to see each broadcast's fanout fan out *in parallel*, not
+    // whether we pipeline broadcasts.
+    for (let m = 0; m < MESSAGE_COUNT; m++) {
+      const t0 = performance.now();
+      await broker.push({ body: `msg-${m}`, data: { t0 } });
+    }
 
-      for (let i = 0; i < SUBSCRIBER_COUNT; i++) {
-        const callsign = `slot-${i.toString().padStart(3, '0')}`;
-        const isSlow = i === SLOW_SUBSCRIBER_INDEX;
-        broker.subscribe(callsign, async (message) => {
-          const now = performance.now();
-          const t0 = Number(
-            (message.data as { t0?: number } | undefined)?.t0 ?? Number.NaN,
-          );
-          if (Number.isFinite(t0)) {
-            latencies.push(now - t0);
-          }
-          if (isSlow) {
-            await new Promise<void>((resolve) => setTimeout(resolve, SLOW_SUBSCRIBER_DELAY_MS));
-          }
-        });
-      }
+    const fastLatencies = latencies.filter(
+      (_, idx) =>
+        // strip deliveries to the slow subscriber: we're measuring
+        // whether the slow sub drags the others, not how long the
+        // slow sub itself takes.
+        idx % SUBSCRIBER_COUNT !== SLOW_SUBSCRIBER_INDEX,
+    );
+    fastLatencies.sort((a, b) => a - b);
 
-      // Push MESSAGE_COUNT broadcasts back-to-back. `broker.push`
-      // awaits full fanout before resolving (including the slow
-      // subscriber's 20ms sleep) — so broadcasts run sequentially
-      // at this layer. That's fine for the harness purpose: we want
-      // to see each broadcast's fanout fan out *in parallel*, not
-      // whether we pipeline broadcasts.
-      for (let m = 0; m < MESSAGE_COUNT; m++) {
-        const t0 = performance.now();
-        await broker.push({ body: `msg-${m}`, data: { t0 } });
-      }
+    const p50 = percentile(fastLatencies, 50);
+    const p95 = percentile(fastLatencies, 95);
+    const p99 = percentile(fastLatencies, 99);
 
-      const fastLatencies = latencies.filter(
-        (_, idx) =>
-          // strip deliveries to the slow subscriber: we're measuring
-          // whether the slow sub drags the others, not how long the
-          // slow sub itself takes.
-          (idx % SUBSCRIBER_COUNT) !== SLOW_SUBSCRIBER_INDEX,
-      );
-      fastLatencies.sort((a, b) => a - b);
+    const totalDeliveries = SUBSCRIBER_COUNT * MESSAGE_COUNT;
+    // eslint-disable-next-line no-console
+    console.log(
+      `fanout-load: deliveries=${latencies.length}/${totalDeliveries} ` +
+        `p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms p99=${p99.toFixed(2)}ms ` +
+        `(slow sub excluded from percentile stats; its own delivery includes the ${SLOW_SUBSCRIBER_DELAY_MS}ms sleep)`,
+    );
 
-      const p50 = percentile(fastLatencies, 50);
-      const p95 = percentile(fastLatencies, 95);
-      const p99 = percentile(fastLatencies, 99);
-
-      const totalDeliveries = SUBSCRIBER_COUNT * MESSAGE_COUNT;
-      // eslint-disable-next-line no-console
-      console.log(
-        `fanout-load: deliveries=${latencies.length}/${totalDeliveries} ` +
-          `p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms p99=${p99.toFixed(2)}ms ` +
-          `(slow sub excluded from percentile stats; its own delivery includes the ${SLOW_SUBSCRIBER_DELAY_MS}ms sleep)`,
-      );
-
-      expect(latencies).toHaveLength(totalDeliveries);
-      expect(p99).toBeLessThan(IN_PROCESS_P99_BUDGET_MS);
-    },
-    30_000,
-  );
+    expect(latencies).toHaveLength(totalDeliveries);
+    expect(p99).toBeLessThan(IN_PROCESS_P99_BUDGET_MS);
+  }, 30_000);
 });
