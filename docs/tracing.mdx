@@ -247,6 +247,53 @@ Use `--no-trace` when:
 - The agent you're spawning doesn't honor `HTTPS_PROXY` and the
   proxy just adds latency without capturing anything
 
+## Storage planning
+
+Activity rows are the heaviest-write path in the broker. Real-world
+shape observed on a single active agent:
+
+- **Event volume:** up to 50 events per batch, flushed every 500ms /
+  64 KB / full batch (whichever comes first).
+- **Payload size:** an `llm_exchange` row is typically 10-100 KB of
+  JSON — model, messages, tool_use/tool_result blocks, usage stats.
+  `opaque_http` rows are smaller.
+- **Aggregate:** 10 LLM calls/min × 50 KB × 24h × 10 concurrent
+  agents ≈ **~7 GB/day/squadron**.
+
+Two operational controls keep that bounded:
+
+### Dedicated activity database
+
+The activity store runs on its own `DatabaseSyncInstance` — a
+separate SQLite file from the main broker DB. Default location:
+`<mainDbPath>-activity.db` (e.g. `./control17.db` →
+`./control17-activity.db`). Override via `runServer({ activityDbPath })`
+or the `C17_ACTIVITY_DB_PATH` env var on the CLI.
+
+Why two DBs: trace writes are bursty and heavy. Keeping them off
+the main broker's single writer lock ensures a burst of activity
+doesn't stall chat / objective / auth / session writes. Both DBs
+use WAL + `busy_timeout=5000` + `wal_autocheckpoint=1000` — see
+`apps/server/src/db.ts`.
+
+### Retention with `c17 prune-traces`
+
+```bash
+c17 prune-traces --older-than 30d
+```
+
+Deletes every activity row with `event.ts` older than the cutoff.
+Prompts with the activity DB path + cutoff timestamp before
+running unless `--yes` is passed. Non-TTY runs without `--yes`
+refuse rather than silently destroying data.
+
+Accepted duration shapes: `30d`, `7d`, `24h`, `60m`, `3600s`,
+`500ms`. Case-insensitive.
+
+Typical cadence: daily cron, 30-90 day retention window depending
+on audit requirements. A future in-broker background sweeper
+will wrap the same path; today prune is operator-scheduled.
+
 ## Limitations (v1)
 
 - **HTTP/1.1 only.** HTTP/2 agents (which negotiate `h2` via
