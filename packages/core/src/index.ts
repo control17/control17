@@ -7,6 +7,14 @@
  */
 
 export {
+  type ActivityListener,
+  type ActivityStore,
+  clampListLimit,
+  InMemoryActivityStore,
+  type InMemoryActivityStoreOptions,
+  type ListActivityFilter,
+} from './activity-store.js';
+export {
   Broker,
   type BrokerLogger,
   type BrokerOptions,
