@@ -368,15 +368,9 @@ async function handleRoster(args: string[]): Promise<void> {
     }
     log('');
     log(`c17 roster --reveal-token → rotating '${slot}' token.`);
-    log(
-      '  (c17 never persists token plaintext; the only honest "reveal"',
-    );
-    log(
-      '   is to mint a fresh token and print it once. This invalidates',
-    );
-    log(
-      '   any previous token for this slot.)',
-    );
+    log('  (c17 never persists token plaintext; the only honest "reveal"');
+    log('   is to mint a fresh token and print it once. This invalidates');
+    log('   any previous token for this slot.)');
     const rotateInput: RotateCommandInput = {
       slot,
       configPath: getString(values, 'config-path') ?? getString(values, 'config'),

@@ -23,7 +23,12 @@ function llm(ts: number): AgentActivityEvent {
       messages: [],
       tools: [],
       stopReason: 'end_turn',
-      usage: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+      usage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      },
     },
   };
 }

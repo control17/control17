@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  InMemoryPushSubscriptionStore,
-  type PushSubscriptionInput,
-} from '../src/index.js';
+import { InMemoryPushSubscriptionStore, type PushSubscriptionInput } from '../src/index.js';
 
-function sampleInput(
-  overrides: Partial<PushSubscriptionInput> = {},
-): PushSubscriptionInput {
+function sampleInput(overrides: Partial<PushSubscriptionInput> = {}): PushSubscriptionInput {
   return {
     slotCallsign: 'alpha',
     endpoint: 'https://push.example/endpoint/xyz',
@@ -31,13 +26,9 @@ describe('InMemoryPushSubscriptionStore.upsert', () => {
   it('replaces existing row on endpoint collision without duplicating', async () => {
     let now = 1_000;
     const store = new InMemoryPushSubscriptionStore({ now: () => now });
-    const first = await store.upsert(
-      sampleInput({ p256dh: 'key-v1', auth: 'auth-v1' }),
-    );
+    const first = await store.upsert(sampleInput({ p256dh: 'key-v1', auth: 'auth-v1' }));
     now = 2_000;
-    const second = await store.upsert(
-      sampleInput({ p256dh: 'key-v2', auth: 'auth-v2' }),
-    );
+    const second = await store.upsert(sampleInput({ p256dh: 'key-v2', auth: 'auth-v2' }));
     expect(second.id).toBe(first.id); // same row, re-used id
     expect(second.p256dh).toBe('key-v2');
     expect(second.createdAt).toBe(2_000);
@@ -57,21 +48,12 @@ describe('InMemoryPushSubscriptionStore.upsert', () => {
 describe('InMemoryPushSubscriptionStore.listForSlot', () => {
   it('returns only rows owned by the requested slot', async () => {
     const store = new InMemoryPushSubscriptionStore();
-    await store.upsert(
-      sampleInput({ slotCallsign: 'alpha', endpoint: 'https://a' }),
-    );
-    await store.upsert(
-      sampleInput({ slotCallsign: 'alpha', endpoint: 'https://b' }),
-    );
-    await store.upsert(
-      sampleInput({ slotCallsign: 'bravo', endpoint: 'https://c' }),
-    );
+    await store.upsert(sampleInput({ slotCallsign: 'alpha', endpoint: 'https://a' }));
+    await store.upsert(sampleInput({ slotCallsign: 'alpha', endpoint: 'https://b' }));
+    await store.upsert(sampleInput({ slotCallsign: 'bravo', endpoint: 'https://c' }));
     const alphaRows = await store.listForSlot('alpha');
     expect(alphaRows).toHaveLength(2);
-    expect(alphaRows.map((r) => r.endpoint).sort()).toEqual([
-      'https://a',
-      'https://b',
-    ]);
+    expect(alphaRows.map((r) => r.endpoint).sort()).toEqual(['https://a', 'https://b']);
   });
 
   it('returns empty array for slots with no subscriptions', async () => {
@@ -97,18 +79,14 @@ describe('InMemoryPushSubscriptionStore.findByEndpoint', () => {
 describe('InMemoryPushSubscriptionStore.deleteForSlot', () => {
   it('removes the row when slot owns it', async () => {
     const store = new InMemoryPushSubscriptionStore();
-    const row = await store.upsert(
-      sampleInput({ slotCallsign: 'alpha', endpoint: 'https://x' }),
-    );
+    const row = await store.upsert(sampleInput({ slotCallsign: 'alpha', endpoint: 'https://x' }));
     await store.deleteForSlot(row.id, 'alpha');
     expect(await store.findByEndpoint('https://x')).toBeNull();
   });
 
   it('is a no-op when a different slot asks (id-guess protection)', async () => {
     const store = new InMemoryPushSubscriptionStore();
-    const row = await store.upsert(
-      sampleInput({ slotCallsign: 'alpha', endpoint: 'https://x' }),
-    );
+    const row = await store.upsert(sampleInput({ slotCallsign: 'alpha', endpoint: 'https://x' }));
     await store.deleteForSlot(row.id, 'bravo');
     expect(await store.findByEndpoint('https://x')).not.toBeNull();
   });

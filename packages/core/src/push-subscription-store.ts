@@ -93,9 +93,7 @@ export interface InMemoryPushSubscriptionStoreOptions {
   now?: () => number;
 }
 
-export class InMemoryPushSubscriptionStore
-  implements PushSubscriptionStore
-{
+export class InMemoryPushSubscriptionStore implements PushSubscriptionStore {
   private readonly rows: PushSubscriptionRow[] = [];
   private readonly now: () => number;
   private nextId = 1;
@@ -104,13 +102,9 @@ export class InMemoryPushSubscriptionStore
     this.now = options.now ?? Date.now;
   }
 
-  async upsert(
-    input: PushSubscriptionInput,
-  ): Promise<PushSubscriptionRow> {
+  async upsert(input: PushSubscriptionInput): Promise<PushSubscriptionRow> {
     const now = this.now();
-    const existingIdx = this.rows.findIndex(
-      (r) => r.endpoint === input.endpoint,
-    );
+    const existingIdx = this.rows.findIndex((r) => r.endpoint === input.endpoint);
     if (existingIdx >= 0) {
       const current = this.rows[existingIdx]!;
       const replaced: PushSubscriptionRow = {
@@ -142,22 +136,16 @@ export class InMemoryPushSubscriptionStore
     return row;
   }
 
-  async listForSlot(
-    slotCallsign: string,
-  ): Promise<PushSubscriptionRow[]> {
+  async listForSlot(slotCallsign: string): Promise<PushSubscriptionRow[]> {
     return this.rows.filter((r) => r.slotCallsign === slotCallsign);
   }
 
-  async findByEndpoint(
-    endpoint: string,
-  ): Promise<PushSubscriptionRow | null> {
+  async findByEndpoint(endpoint: string): Promise<PushSubscriptionRow | null> {
     return this.rows.find((r) => r.endpoint === endpoint) ?? null;
   }
 
   async deleteForSlot(id: number, slotCallsign: string): Promise<void> {
-    const idx = this.rows.findIndex(
-      (r) => r.id === id && r.slotCallsign === slotCallsign,
-    );
+    const idx = this.rows.findIndex((r) => r.id === id && r.slotCallsign === slotCallsign);
     if (idx >= 0) this.rows.splice(idx, 1);
   }
 

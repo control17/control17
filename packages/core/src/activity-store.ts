@@ -25,11 +25,7 @@
  * subscribers never see a row they'd miss via a concurrent `list`.
  */
 
-import type {
-  AgentActivityEvent,
-  AgentActivityKind,
-  AgentActivityRow,
-} from '@control17/sdk/types';
+import type { AgentActivityEvent, AgentActivityKind, AgentActivityRow } from '@control17/sdk/types';
 
 /** Filter for `ActivityStore.list`. All fields AND-combined. */
 export interface ListActivityFilter {

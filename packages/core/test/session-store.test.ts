@@ -1,25 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import {
-  InMemorySessionStore,
-  SESSION_TTL_MS,
-  type SessionRow,
-} from '../src/index.js';
+import { InMemorySessionStore, SESSION_TTL_MS, type SessionRow } from '../src/index.js';
 
-function makeStore(
-  overrides: { now?: () => number; idGenerator?: () => string } = {},
-) {
+function makeStore(overrides: { now?: () => number; idGenerator?: () => string } = {}) {
   let tick = 1000;
   let counter = 0;
   return new InMemorySessionStore({
     now: overrides.now ?? (() => (tick += 100)),
-    idGenerator:
-      overrides.idGenerator ?? (() => `sid-${++counter}`),
+    idGenerator: overrides.idGenerator ?? (() => `sid-${++counter}`),
   });
 }
 
 describe('InMemorySessionStore.create', () => {
   it('mints a fresh row with a TTL-bounded expiresAt', async () => {
-    let now = 5_000;
+    const now = 5_000;
     const store = new InMemorySessionStore({
       now: () => now,
       idGenerator: () => 'sid-fixed',

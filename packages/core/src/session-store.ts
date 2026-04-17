@@ -97,10 +97,7 @@ export class InMemorySessionStore implements SessionStore {
     this.idGenerator = options.idGenerator ?? defaultIdGenerator;
   }
 
-  async create(
-    slotCallsign: string,
-    userAgent: string | null,
-  ): Promise<SessionRow> {
+  async create(slotCallsign: string, userAgent: string | null): Promise<SessionRow> {
     const now = this.now();
     const row: SessionRow = {
       id: this.idGenerator(),
@@ -154,9 +151,5 @@ export class InMemorySessionStore implements SessionStore {
 function defaultIdGenerator(): string {
   // NOT cryptographically secure — in-memory is a test fixture. See
   // the class doc for why production impls must not use this.
-  return (
-    'imss_' +
-    Math.random().toString(36).slice(2) +
-    Date.now().toString(36)
-  );
+  return 'imss_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
