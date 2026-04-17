@@ -53,8 +53,11 @@ import { SERVER_VERSION } from './version.js';
 export {
   type AgentActivityStore,
   createSqliteAgentActivityStore,
+  parseDurationMs,
+  pruneActivityDb,
 } from './agent-activity.js';
 export { composeBriefing } from './briefing.js';
+export { type DatabaseSyncInstance, openDatabase } from './db.js';
 export { HttpsConfigError, type LoadedCert } from './https/store.js';
 export {
   ENCRYPTED_FIELD_PREFIX,

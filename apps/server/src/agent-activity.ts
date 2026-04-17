@@ -209,8 +209,52 @@ class SqliteAgentActivityStore implements CoreActivityStore {
       this.emitter.off(key, listener);
     };
   }
+
+  /**
+   * Delete every activity row older than `cutoffTs` (by `event.ts`).
+   * Returns the number of rows deleted. Not part of the core
+   * `ActivityStore` interface — a non-persistent backend has
+   * nothing to prune — but surfaced on the SQLite impl for the
+   * `c17 prune-traces` CLI and any future background-sweep timer.
+   */
+  prune(cutoffTs: number): number {
+    const stmt = this.db.prepare('DELETE FROM agent_activity WHERE ts < ?');
+    const result = stmt.run(cutoffTs);
+    return Number(result.changes ?? 0);
+  }
 }
 
-export function createSqliteAgentActivityStore(db: DatabaseSyncInstance): AgentActivityStore {
+/**
+ * Public type for the SQLite activity store, exposed so callers like
+ * the `c17 prune-traces` CLI can invoke the impl-specific `prune`
+ * method without casting. The core `ActivityStore` interface covers
+ * the append/list/subscribe surface.
+ */
+export type SqliteAgentActivityStoreHandle = SqliteAgentActivityStore;
+
+export function createSqliteAgentActivityStore(
+  db: DatabaseSyncInstance,
+): SqliteAgentActivityStoreHandle {
   return new SqliteAgentActivityStore(db);
 }
+
+/**
+ * Stand-alone helper for tools (like `c17 prune-traces`) that need to
+ * open the activity DB, prune, and close — without spinning up a full
+ * `runServer`. The caller is responsible for picking `cutoffTs`; see
+ * `parseDurationToCutoff` in the CLI for the user-facing shape.
+ *
+ * Returns the number of activity rows deleted.
+ */
+export function pruneActivityDb(db: DatabaseSyncInstance, cutoffTs: number): number {
+  // Ensure the schema exists before pruning — `c17 prune-traces` may
+  // be run against a fresh DB that the server has never booted
+  // against, in which case the table wouldn't exist yet. Idempotent
+  // with the constructor's CREATE IF NOT EXISTS.
+  db.exec(CREATE_SCHEMA);
+  const stmt = db.prepare('DELETE FROM agent_activity WHERE ts < ?');
+  const result = stmt.run(cutoffTs);
+  return Number(result.changes ?? 0);
+}
+
+export { parseDurationMs } from './duration.js';
