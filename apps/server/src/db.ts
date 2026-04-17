@@ -39,8 +39,27 @@ const { DatabaseSync } = nodeRequire('node:sqlite') as NodeSqliteModule;
  */
 export function openDatabase(path: string): DatabaseSyncInstance {
   const db = new DatabaseSync(path);
+  // WAL gives concurrent read-while-write and bounded journal growth;
+  // synchronous=NORMAL trades a small theoretical durability window
+  // (losing the last-committed txn on a power cut between commit and
+  // fsync) for a meaningful throughput win — acceptable for a chat /
+  // objectives / activity workload where we'd rather ship the push
+  // and recompute on restart than block on fsync.
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
   db.exec('PRAGMA foreign_keys = ON');
+  // Default wal_autocheckpoint is 1000 pages (~4MB at default page
+  // size). Set it explicitly so the behavior is documented in-code
+  // rather than implicit. Higher values reduce checkpoint overhead
+  // on heavy-write paths (agent activity) at the cost of a larger
+  // WAL on disk between checkpoints.
+  db.exec('PRAGMA wal_autocheckpoint = 1000');
+  // busy_timeout: if a writer is holding the lock when we try to
+  // read/write, retry for up to 5 s before surfacing SQLITE_BUSY.
+  // Matters more for the main broker DB (multiple modules use the
+  // same handle, but any future multi-handle setup — e.g. the
+  // activity store on its own DB file — benefits from consistent
+  // timeout semantics).
+  db.exec('PRAGMA busy_timeout = 5000');
   return db;
 }
