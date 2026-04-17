@@ -185,6 +185,62 @@ describe('InMemoryActivityStore.list', () => {
   });
 });
 
+// ── prune ────────────────────────────────────────────────────────────
+
+describe('InMemoryActivityStore.prune', () => {
+  it('deletes every row with event.ts < cutoff; returns the count', () => {
+    const s = store();
+    s.append('ALPHA-1', [llm(100), llm(200), llm(300)]);
+    s.append('BRAVO-1', [llm(150), llm(250)]);
+    const deleted = s.prune(200);
+    // ALPHA-1: llm(100) dropped. BRAVO-1: llm(150) dropped. Total 2.
+    expect(deleted).toBe(2);
+    expect(s.size()).toBe(3);
+  });
+
+  it('is idempotent — repeat calls delete zero more rows', () => {
+    const s = store();
+    s.append('ALPHA-1', [llm(100), llm(200), llm(300)]);
+    expect(s.prune(200)).toBe(1);
+    expect(s.prune(200)).toBe(0);
+  });
+
+  it('cutoff after all rows drains the slot bucket entirely', () => {
+    const s = store();
+    s.append('ALPHA-1', [llm(100), llm(200)]);
+    expect(s.prune(1000)).toBe(2);
+    expect(s.size()).toBe(0);
+    expect(s.list({ slotCallsign: 'ALPHA-1' })).toEqual([]);
+  });
+
+  it('cutoff before every row deletes nothing', () => {
+    const s = store();
+    s.append('ALPHA-1', [llm(100), llm(200)]);
+    expect(s.prune(50)).toBe(0);
+    expect(s.size()).toBe(2);
+  });
+
+  it('converges to retention target within 1% on realistic event distributions', () => {
+    const s = store();
+    // Simulate 1000 events spread evenly over a notional 30-day window.
+    const thirtyDaysMs = 30 * 24 * 60 * 60_000;
+    const now = 1_700_000_000_000;
+    const events = Array.from({ length: 1000 }, (_, i) => llm(now - (thirtyDaysMs * i) / 1000));
+    s.append('ALPHA-1', events);
+
+    // Prune to keep the last 7 days.
+    const sevenDaysMs = 7 * 24 * 60 * 60_000;
+    const cutoff = now - sevenDaysMs;
+    const deleted = s.prune(cutoff);
+
+    // Expected: events i such that (thirtyDaysMs * i) / 1000 > sevenDaysMs
+    //         = i > 1000 * 7/30 = 233.3
+    // So events i=234..999 get pruned = 766 rows. Accept within 1%.
+    const expected = 766;
+    expect(Math.abs(deleted - expected) / expected).toBeLessThan(0.01);
+  });
+});
+
 // ── subscribe ────────────────────────────────────────────────────────
 
 describe('InMemoryActivityStore.subscribe', () => {
