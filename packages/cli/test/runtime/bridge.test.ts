@@ -267,7 +267,13 @@ describeIfBuilt('runner + bridge end-to-end', () => {
       data: { run: '1234', severity: 'high' },
     });
 
-    const notif = await waitForMessage((m) => m.method === 'notifications/claude/channel');
+    // Skip the comms-check notification the runner sends on bridge
+    // connect and wait for the forwarded SSE message.
+    const notif = await waitForMessage(
+      (m) =>
+        m.method === 'notifications/claude/channel' &&
+        (m.params as { content?: string })?.content === 'ci failed on main',
+    );
     const params = notif.params as {
       content: string;
       meta: Record<string, string>;

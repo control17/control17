@@ -239,7 +239,7 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
 
     const conn = createBridgeConnection(socket, {
       handleRequest: async (frame) => {
-        return handleMcpRequest(frame, briefing, () => openObjectives, brokerClient);
+        return handleMcpRequest(frame, briefing, brokerClient);
       },
       onClose: () => {
         if (activeBridge === conn) activeBridge = null;
@@ -310,13 +310,6 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
         }
       }
       openObjectives = next;
-      if (activeBridge !== null) {
-        activeBridge.sendNotification({
-          kind: 'mcp_notification',
-          method: 'notifications/tools/list_changed',
-          params: undefined,
-        });
-      }
     },
   });
 
@@ -422,12 +415,11 @@ export async function startRunner(options: RunnerOptions): Promise<RunnerHandle>
 async function handleMcpRequest(
   frame: { id: number; method: string; params: Record<string, unknown> | undefined },
   briefing: BriefingResponse,
-  getOpenObjectives: () => Objective[],
   brokerClient: BrokerClient,
 ): Promise<IpcMcpResponse> {
   try {
     if (frame.method === 'tools/list') {
-      const tools = defineTools(briefing, getOpenObjectives());
+      const tools = defineTools(briefing);
       return { kind: 'mcp_response', id: frame.id, result: { tools } };
     }
     if (frame.method === 'tools/call') {

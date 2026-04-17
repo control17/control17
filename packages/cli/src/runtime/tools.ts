@@ -19,13 +19,7 @@
  */
 
 import type { Client as BrokerClient, ClientError } from '@control17/sdk/client';
-import type {
-  BriefingResponse,
-  LogLevel,
-  Message,
-  Objective,
-  ObjectiveStatus,
-} from '@control17/sdk/types';
+import type { BriefingResponse, LogLevel, Message, ObjectiveStatus } from '@control17/sdk/types';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 
 const LEVELS: readonly LogLevel[] = ['debug', 'info', 'notice', 'warning', 'error', 'critical'];
@@ -35,41 +29,18 @@ const DEFAULT_RECENT_LIMIT = 50;
 const MAX_RECENT_LIMIT = 500;
 
 /**
- * Build the tool set with descriptions composed from the briefing +
- * the caller's live open objectives. Pure function — trivially
- * re-invokable when the ObjectivesTracker fires
- * `notifications/tools/list_changed`.
+ * Build the tool set with descriptions composed from the briefing.
+ * Tool descriptions are stable — objective state is delivered via
+ * channel notifications, not baked into tool metadata.
  */
-export function defineTools(briefing: BriefingResponse, openObjectives: Objective[]): Tool[] {
+export function defineTools(briefing: BriefingResponse): Tool[] {
   const { callsign, role, authority, squadron, teammates } = briefing;
-  // Short, consistent identity string reused across tool descriptions
-  // so the agent's ambient sticky context always surfaces its rank
-  // alongside its callsign and role. Tool descriptions refresh via
-  // `tools/list_changed`, so even after context compaction the agent
-  // re-reads its own rank on the next turn.
   const identity = `${callsign} (role: ${role}, rank: ${authority})`;
   const others = teammates.filter((t) => t.callsign !== callsign);
   const teammateList =
     others.length > 0
       ? others.map((t) => `${t.callsign} (${t.role})`).join(', ')
       : '(no other teammates currently defined)';
-
-  const openCount = openObjectives.length;
-  const openLine =
-    openCount === 0
-      ? 'You currently have no objectives assigned.'
-      : `You currently have ${openCount} open objective(s): ${openObjectives
-          .map((o) => `${o.id} "${o.title}" [${o.status}]`)
-          .join('; ')}.`;
-
-  // The most recently-updated active objective's outcome is surfaced
-  // on the complete tool so the acceptance criteria are visible at the
-  // moment the agent goes to mark done.
-  const primaryActive =
-    openObjectives.find((o) => o.status === 'active') ?? openObjectives[0] ?? null;
-  const acceptanceLine = primaryActive
-    ? `Current acceptance criteria for ${primaryActive.id}: ${primaryActive.outcome}`
-    : 'No open objective currently has acceptance criteria — call this tool only after claiming work.';
 
   return [
     {
@@ -147,7 +118,7 @@ export function defineTools(briefing: BriefingResponse, openObjectives: Objectiv
       name: 'objectives_list',
       description:
         `List objectives you have a relationship with on squadron ${squadron.name} — ` +
-        `assigned to you, originated by you, or objectives you're watching. ${openLine} ` +
+        `assigned to you, originated by you, or objectives you're watching. ` +
         `Use \`status\` to filter (active | blocked | done | cancelled); omit to see all ` +
         `statuses. Objectives always carry a required outcome — use \`objectives_view\` ` +
         `for full detail including the watcher list and audit log.`,
@@ -234,7 +205,8 @@ export function defineTools(briefing: BriefingResponse, openObjectives: Objectiv
     {
       name: 'objectives_complete',
       description:
-        `Mark an objective as done with a required result summary. ${acceptanceLine} The ` +
+        `Mark an objective as done with a required result summary. Call ` +
+        `\`objectives_view\` first to refresh the acceptance criteria in context. The ` +
         `\`result\` should explicitly address whether the stated outcome was met and link ` +
         `or describe the deliverable. Only the current assignee may call this.`,
       inputSchema: {

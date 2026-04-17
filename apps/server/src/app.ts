@@ -40,6 +40,7 @@ import {
   UploadAgentActivityRequestSchema,
 } from '@control17/sdk/schemas';
 import type {
+  AgentActivityEvent,
   Message,
   Objective,
   ObjectiveEvent,
@@ -1083,6 +1084,26 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
       // if no push arrives for a while.
       await stream.writeSSE({ event: 'connected', data: agentId });
 
+      // Comms check — push a message through the normal channel so
+      // the agent's first turn includes it in context. If the agent
+      // has active objectives, the runner's context watchdog will
+      // detect whether they're still in the LLM context after this
+      // exchange and re-push them if not.
+      if (objectives) {
+        const active = [
+          ...objectives.list({ assignee: slot.callsign, status: 'active' }),
+          ...objectives.list({ assignee: slot.callsign, status: 'blocked' }),
+        ];
+        const body =
+          active.length > 0
+            ? `${slot.callsign} on net. ${active.length} active objective(s) on your plate.`
+            : `${slot.callsign} on net. No active objectives.`;
+        void broker.push(
+          { agentId: slot.callsign, body, title: 'comms check', level: 'info' },
+          { from: 'c17' },
+        );
+      }
+
       // Keep the handler alive until the client disconnects or the
       // server is shutting down; send a periodic keepalive so idle
       // proxies don't drop us.
@@ -1170,6 +1191,15 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
       }
       try {
         const rows = agentActivity.append(callsign, parsed.data.events);
+
+        // Objective context watchdog: after appending, check whether
+        // any llm_exchange events are missing active objective IDs
+        // from their context. If so, push a reminder so the agent
+        // picks the objective back up.
+        if (objectives) {
+          checkObjectiveContext(parsed.data.events, callsign, objectives, broker, logger);
+        }
+
         return c.json({ accepted: rows.length }, 201);
       } catch (err) {
         logger.warn('agent activity append failed', {
@@ -1310,6 +1340,77 @@ export function createApp(options: AppOptions): Hono<AppBindings> {
   }
 
   return app;
+}
+
+/**
+ * Objective context watchdog — scans uploaded LLM exchanges for
+ * active objective IDs. If an objective is active for this slot but
+ * its ID doesn't appear anywhere in the exchange's system prompt or
+ * messages, the agent has lost context (compaction, long session).
+ * Pushes a reminder through the broker so the agent picks it back up.
+ *
+ * Debounced per slot: only fires once per batch of uploads, and
+ * only for the most recent exchange (checking every exchange in a
+ * batch would spam on fast-uploading agents).
+ */
+const watchdogLastFired = new Map<string, number>();
+const WATCHDOG_COOLDOWN_MS = 5 * 60 * 1000;
+
+function checkObjectiveContext(
+  events: AgentActivityEvent[],
+  callsign: string,
+  objectivesStore: ObjectivesStore,
+  broker: Broker,
+  logger: Logger,
+): void {
+  // Only inspect the most recent llm_exchange in this batch.
+  const llmEvent = events.findLast((e) => e.kind === 'llm_exchange');
+  if (!llmEvent || llmEvent.kind !== 'llm_exchange') return;
+
+  const active = [
+    ...objectivesStore.list({ assignee: callsign, status: 'active' }),
+    ...objectivesStore.list({ assignee: callsign, status: 'blocked' }),
+  ];
+  if (active.length === 0) return;
+
+  // Build a string from the full request context the agent sent to
+  // the LLM: system prompt + all text content blocks.
+  const entry = llmEvent.entry;
+  const parts: string[] = [];
+  if (entry.request.system) parts.push(entry.request.system);
+  for (const m of entry.request.messages) {
+    for (const block of m.content) {
+      if ('text' in block && typeof block.text === 'string') {
+        parts.push(block.text);
+      }
+    }
+  }
+  const contextText = parts.join(' ');
+
+  const now = Date.now();
+  const missing = active.filter((o) => {
+    if (contextText.includes(o.id)) return false;
+    const key = `${callsign}:${o.id}`;
+    const last = watchdogLastFired.get(key) ?? 0;
+    return now - last > WATCHDOG_COOLDOWN_MS;
+  });
+  if (missing.length === 0) return;
+
+  const lines = missing.map((o) => `  ${o.id}: ${o.title}\n    outcome: ${o.outcome}`);
+  const body =
+    `You have ${missing.length} active objective(s) that are no longer in your context. ` +
+    `Here they are — call \`objectives_view\` for full details:\n${lines.join('\n')}`;
+
+  for (const o of missing) watchdogLastFired.set(`${callsign}:${o.id}`, now);
+
+  void broker.push(
+    { agentId: callsign, body, title: 'objective context reminder', level: 'notice' },
+    { from: 'c17' },
+  );
+  logger.info('objective context watchdog fired', {
+    callsign,
+    missing: missing.map((o) => o.id),
+  });
 }
 
 /** Re-export so `LoadedSlot` consumers don't have to dig into slots.ts. */
