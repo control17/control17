@@ -22,8 +22,13 @@
  */
 
 import { EventEmitter } from 'node:events';
+import type {
+  ActivityListener,
+  ActivityStore as CoreActivityStore,
+  ListActivityFilter as CoreListActivityFilter,
+} from '@control17/core';
 import { AgentActivityEventSchema } from '@control17/sdk/schemas';
-import type { AgentActivityEvent, AgentActivityKind, AgentActivityRow } from '@control17/sdk/types';
+import type { AgentActivityEvent, AgentActivityRow } from '@control17/sdk/types';
 import type { DatabaseSyncInstance, StatementInstance } from './db.js';
 
 const CREATE_SCHEMA = `
@@ -85,40 +90,26 @@ function rowToActivity(row: AgentActivityRowRaw): AgentActivityRow {
   };
 }
 
-export interface ListActivityFilter {
-  slotCallsign: string;
-  from?: number;
-  to?: number;
-  kinds?: readonly AgentActivityKind[];
-  limit?: number;
-}
+/**
+ * Server-side alias for `@control17/core`'s `ListActivityFilter`.
+ * Re-exported so existing server callers don't have to switch imports
+ * in the same PR; new code should import directly from core.
+ */
+export type ListActivityFilter = CoreListActivityFilter;
 
-export interface AgentActivityStore {
-  /**
-   * Append events for a slot. Events are inserted in a single
-   * transaction; if any one fails, nothing lands. Returns the
-   * number of rows actually persisted.
-   */
-  append(slotCallsign: string, events: readonly AgentActivityEvent[]): AgentActivityRow[];
-  /**
-   * Range query. Returns rows **newest-first** up to `limit`
-   * (default 200, max 1000). Pass `from`/`to` to bound the
-   * timestamp window; pass `kinds` to filter to a subset of
-   * event kinds. All filters are AND-combined.
-   */
-  list(filter: ListActivityFilter): AgentActivityRow[];
-  /**
-   * Subscribe to new rows landing for a given slot. Fires
-   * synchronously after each successful append. Returns an
-   * unsubscribe callback.
-   */
-  subscribe(slotCallsign: string, listener: (row: AgentActivityRow) => void): () => void;
-}
+/**
+ * Server-side alias for `@control17/core`'s `ActivityStore`. The
+ * SQLite impl below `implements ActivityStore` from core; this alias
+ * keeps existing server-side consumer types stable while the consumer
+ * migration PR moves the rest of the codebase onto the core import
+ * directly.
+ */
+export type AgentActivityStore = CoreActivityStore;
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
 
-class SqliteAgentActivityStore implements AgentActivityStore {
+class SqliteAgentActivityStore implements CoreActivityStore {
   private readonly db: DatabaseSyncInstance;
   private readonly insertStmt: StatementInstance;
   private readonly emitter = new EventEmitter();
@@ -211,15 +202,59 @@ class SqliteAgentActivityStore implements AgentActivityStore {
     return rows.map(rowToActivity);
   }
 
-  subscribe(slotCallsign: string, listener: (row: AgentActivityRow) => void): () => void {
+  subscribe(slotCallsign: string, listener: ActivityListener): () => void {
     const key = `row:${slotCallsign}`;
     this.emitter.on(key, listener);
     return () => {
       this.emitter.off(key, listener);
     };
   }
+
+  /**
+   * Delete every activity row older than `cutoffTs` (by `event.ts`).
+   * Returns the number of rows deleted. Not part of the core
+   * `ActivityStore` interface — a non-persistent backend has
+   * nothing to prune — but surfaced on the SQLite impl for the
+   * `c17 prune-traces` CLI and any future background-sweep timer.
+   */
+  prune(cutoffTs: number): number {
+    const stmt = this.db.prepare('DELETE FROM agent_activity WHERE ts < ?');
+    const result = stmt.run(cutoffTs);
+    return Number(result.changes ?? 0);
+  }
 }
 
-export function createSqliteAgentActivityStore(db: DatabaseSyncInstance): AgentActivityStore {
+/**
+ * Public type for the SQLite activity store, exposed so callers like
+ * the `c17 prune-traces` CLI can invoke the impl-specific `prune`
+ * method without casting. The core `ActivityStore` interface covers
+ * the append/list/subscribe surface.
+ */
+export type SqliteAgentActivityStoreHandle = SqliteAgentActivityStore;
+
+export function createSqliteAgentActivityStore(
+  db: DatabaseSyncInstance,
+): SqliteAgentActivityStoreHandle {
   return new SqliteAgentActivityStore(db);
 }
+
+/**
+ * Stand-alone helper for tools (like `c17 prune-traces`) that need to
+ * open the activity DB, prune, and close — without spinning up a full
+ * `runServer`. The caller is responsible for picking `cutoffTs`; see
+ * `parseDurationToCutoff` in the CLI for the user-facing shape.
+ *
+ * Returns the number of activity rows deleted.
+ */
+export function pruneActivityDb(db: DatabaseSyncInstance, cutoffTs: number): number {
+  // Ensure the schema exists before pruning — `c17 prune-traces` may
+  // be run against a fresh DB that the server has never booted
+  // against, in which case the table wouldn't exist yet. Idempotent
+  // with the constructor's CREATE IF NOT EXISTS.
+  db.exec(CREATE_SCHEMA);
+  const stmt = db.prepare('DELETE FROM agent_activity WHERE ts < ?');
+  const result = stmt.run(cutoffTs);
+  return Number(result.changes ?? 0);
+}
+
+export { parseDurationMs } from './duration.js';

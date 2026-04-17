@@ -27,6 +27,7 @@ import { formatReport, runDoctor } from './commands/doctor.js';
 import { runEnrollCommand } from './commands/enroll.js';
 import { UsageError } from './commands/errors.js';
 import { runObjectivesCommand } from './commands/objectives.js';
+import { runPruneTracesCommand } from './commands/prune-traces.js';
 import { type PushCommandInput, runPushCommand } from './commands/push.js';
 import { QuickstartError, runQuickstartCommand } from './commands/quickstart.js';
 import { runRosterCommand } from './commands/roster.js';
@@ -50,6 +51,7 @@ usage:
                                     list slots (no flags) or rotate+print a slot's token (alias over 'c17 rotate')
   c17 objectives  list|view|create|update|complete|cancel|reassign   squadron objectives
   c17 serve       [--config-path <path>] [--port <n>] [--host <h>] [--db <path>]
+  c17 prune-traces --older-than <duration> [--activity-db <path>] [--yes]   delete activity rows older than the cutoff
 
 global options (or via env):
   --url <url>       broker base URL (env: ${ENV.url}, default: http://127.0.0.1:${DEFAULT_PORT})
@@ -127,6 +129,9 @@ async function main(): Promise<void> {
       return;
     case 'serve':
       await handleServe(rest);
+      return;
+    case 'prune-traces':
+      await handlePruneTraces(rest);
       return;
     case 'mcp-bridge':
       await handleMcpBridge(rest);
@@ -207,6 +212,32 @@ async function handleRotate(args: string[]): Promise<void> {
       {
         slot: getString(values, 'slot'),
         configPath: getString(values, 'config-path') ?? getString(values, 'config'),
+      },
+      (line) => log(line),
+    );
+  } catch (err) {
+    if (err instanceof UsageError) fail(err.message, 2);
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handlePruneTraces(args: string[]): Promise<void> {
+  const { values } = parseSubcommandArgs(args, {
+    'older-than': { type: 'string' },
+    'activity-db': { type: 'string' },
+    yes: { type: 'boolean', short: 'y' },
+    help: { type: 'boolean', short: 'h' },
+  });
+  if (values.help === true) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  try {
+    await runPruneTracesCommand(
+      {
+        olderThan: getString(values, 'older-than'),
+        activityDbPath: getString(values, 'activity-db'),
+        yes: getBoolean(values, 'yes'),
       },
       (line) => log(line),
     );

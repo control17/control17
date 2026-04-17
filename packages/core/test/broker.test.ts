@@ -301,6 +301,102 @@ describe('Broker.push broadcast', () => {
   });
 });
 
+describe('Broker fanout concurrency', () => {
+  it('delivers to slow subscribers in parallel — one stuck callback does not block others', async () => {
+    const { broker } = makeBroker();
+    await broker.register('a1');
+    await broker.register('a2');
+    await broker.register('a3');
+
+    let a1Resolved = false;
+    let a2Resolved = false;
+    let a3Resolved = false;
+    let releaseA1: () => void = () => {};
+
+    broker.subscribe('a1', async () => {
+      await new Promise<void>((resolve) => {
+        releaseA1 = resolve;
+      });
+      a1Resolved = true;
+    });
+    broker.subscribe('a2', async () => {
+      a2Resolved = true;
+    });
+    broker.subscribe('a3', async () => {
+      a3Resolved = true;
+    });
+
+    const pushPromise = broker.push({ body: 'broadcast' });
+
+    // Give the microtask queue a chance to run a2 + a3 in parallel
+    // with the stuck a1. Under the pre-2026-04-16 serial fanout,
+    // a2 and a3 would be blocked behind a1 until releaseA1 fires.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(a2Resolved).toBe(true);
+    expect(a3Resolved).toBe(true);
+    expect(a1Resolved).toBe(false);
+
+    // Release a1 and let the push complete.
+    releaseA1();
+    const result = await pushPromise;
+    expect(a1Resolved).toBe(true);
+    expect(result.delivery.sse).toBe(3);
+  });
+
+  it('a throwing subscriber does not abort fanout to others', async () => {
+    const { broker } = makeBroker();
+    await broker.register('a1');
+    await broker.register('a2');
+
+    broker.subscribe('a1', () => {
+      throw new Error('boom');
+    });
+    const received: Message[] = [];
+    broker.subscribe('a2', (m) => {
+      received.push(m);
+    });
+
+    const result = await broker.push({ body: 'hi' });
+    // sse count is 1 (a2) because a1's subscriber threw.
+    expect(result.delivery.sse).toBe(1);
+    expect(received).toHaveLength(1);
+  });
+
+  it('honors fanoutConcurrency=1 for reproducible serial delivery', async () => {
+    const eventLog = new InMemoryEventLog();
+    const broker = new Broker({
+      eventLog,
+      now: (() => {
+        let t = 0;
+        return () => ++t;
+      })(),
+      idFactory: (() => {
+        let id = 0;
+        return () => `msg-${++id}`;
+      })(),
+      fanoutConcurrency: 1,
+    });
+    await broker.register('a1');
+    await broker.register('a2');
+    await broker.register('a3');
+
+    const order: string[] = [];
+    broker.subscribe('a1', async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      order.push('a1');
+    });
+    broker.subscribe('a2', async () => {
+      order.push('a2');
+    });
+    broker.subscribe('a3', async () => {
+      order.push('a3');
+    });
+
+    await broker.push({ body: 'serial' });
+    expect(order).toEqual(['a1', 'a2', 'a3']);
+  });
+});
+
 describe('Broker.subscribe', () => {
   it('auto-registers the agent if not previously known', async () => {
     const { broker } = makeBroker();

@@ -53,8 +53,11 @@ import { SERVER_VERSION } from './version.js';
 export {
   type AgentActivityStore,
   createSqliteAgentActivityStore,
+  parseDurationMs,
+  pruneActivityDb,
 } from './agent-activity.js';
 export { composeBriefing } from './briefing.js';
+export { type DatabaseSyncInstance, openDatabase } from './db.js';
 export { HttpsConfigError, type LoadedCert } from './https/store.js';
 export {
   ENCRYPTED_FIELD_PREFIX,
@@ -154,6 +157,25 @@ export interface RunServerOptions {
   port?: number;
   host?: string;
   dbPath?: string;
+  /**
+   * Dedicated SQLite file for the agent-activity (trace) store.
+   *
+   * Activity rows are the heaviest-write path in the broker — every
+   * captured LLM exchange and every opaque HTTP chunk lands here,
+   * batched at up to 50 events / 64 KB / 500 ms per active agent.
+   * Running it on its own `DatabaseSyncInstance` keeps trace writes
+   * from contending with the main broker DB's write lock (events,
+   * objectives, sessions, push-subs). Dan's 2026-04-16 audit Part 5
+   * flagged single-connection contention as the first real ceiling
+   * we'd hit under load.
+   *
+   * Semantics:
+   *   - Omitted + `dbPath === ':memory:'`   → `:memory:` (separate handle, fully isolated).
+   *   - Omitted + `dbPath` is a file path  → `<dbPath>-activity.db` alongside the main DB.
+   *   - Explicit `:memory:`                → separate in-memory DB.
+   *   - Explicit file path                  → opened as-is.
+   */
+  activityDbPath?: string;
   logger?: Logger;
   /**
    * Optional callback once all listeners are bound. Fires once per
@@ -195,6 +217,23 @@ function defaultPublicRoot(): string {
   return pathResolve(dirname(fileURLToPath(import.meta.url)), '../public');
 }
 
+/**
+ * Derive the default activity-DB path from the main DB path.
+ *   - `:memory:`       → `:memory:` (separate in-memory DB).
+ *   - `/path/foo.db`   → `/path/foo-activity.db`.
+ *   - `/path/foo`      → `/path/foo-activity` (no extension case).
+ * Keeps files next to the main DB so an operator who backs up one
+ * directory backs up both.
+ */
+function defaultActivityDbPath(mainDbPath: string): string {
+  if (mainDbPath === ':memory:') return ':memory:';
+  const extIdx = mainDbPath.lastIndexOf('.');
+  if (extIdx > mainDbPath.lastIndexOf('/') && extIdx !== -1) {
+    return `${mainDbPath.slice(0, extIdx)}-activity${mainDbPath.slice(extIdx)}`;
+  }
+  return `${mainDbPath}-activity`;
+}
+
 export async function runServer(options: RunServerOptions): Promise<RunningServer> {
   const host = options.host ?? '127.0.0.1';
   const dbPath = options.dbPath ?? ':memory:';
@@ -208,15 +247,24 @@ export async function runServer(options: RunServerOptions): Promise<RunningServe
       ? { ...httpsInput, bindHttp: options.port }
       : httpsInput;
 
-  // Open the DB once and share it across modules. `node:sqlite` is
-  // single-connection-per-process; each helper gets a handle into the
-  // same underlying Database, not a new connection.
+  // Open the main broker DB once and share it across modules for
+  // event log / sessions / push-subs / objectives. `node:sqlite` is
+  // single-connection-per-file; every module that writes to the
+  // main DB gets a handle into the same underlying Database, not a
+  // new connection.
   const db: DatabaseSyncInstance = openDatabase(dbPath);
   const eventLog = new SqliteEventLog(db);
   const sessions = new SessionStore(db);
   const pushStore = new PushSubscriptionStore(db);
   const objectivesStore = createSqliteObjectivesStore(db);
-  const agentActivityStore: AgentActivityStore = createSqliteAgentActivityStore(db);
+
+  // Activity store runs on its own `DatabaseSyncInstance` so trace
+  // write pressure doesn't contend with the main broker's write
+  // lock. See `activityDbPath` on RunServerOptions for the default-
+  // derivation rules.
+  const activityDbPath = options.activityDbPath ?? defaultActivityDbPath(dbPath);
+  const activityDb: DatabaseSyncInstance = openDatabase(activityDbPath);
+  const agentActivityStore: AgentActivityStore = createSqliteAgentActivityStore(activityDb);
   sessions.purgeExpired();
 
   // VAPID lifecycle: either the caller provided keys (from the
@@ -413,6 +461,13 @@ export async function runServer(options: RunServerOptions): Promise<RunningServe
                     db.close();
                   } catch (err) {
                     log.warn('db close failed', {
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  }
+                  try {
+                    activityDb.close();
+                  } catch (err) {
+                    log.warn('activity db close failed', {
                       error: err instanceof Error ? err.message : String(err),
                     });
                   }
