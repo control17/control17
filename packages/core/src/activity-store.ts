@@ -86,6 +86,19 @@ export interface ActivityStore {
    * (implementations must iterate a snapshot, not a live set).
    */
   subscribe(slotCallsign: string, listener: ActivityListener): () => void;
+
+  /**
+   * Delete every row where `event.ts < cutoffTs`, across every
+   * slot. Returns the number of rows deleted. Idempotent — calling
+   * twice with the same cutoff on the same store returns 0 the
+   * second time.
+   *
+   * Added in the I2 operability chunk. In-memory stores implement
+   * this via array filter; persistent stores map to
+   * `DELETE FROM ... WHERE ts < ?`. A future in-broker background-
+   * sweep timer wraps this method.
+   */
+  prune(cutoffTs: number): number;
 }
 
 /** Options for `InMemoryActivityStore`. */
@@ -196,6 +209,26 @@ export class InMemoryActivityStore implements ActivityStore {
       const current = this.listenersBySlot.get(slotCallsign);
       current?.delete(listener);
     };
+  }
+
+  prune(cutoffTs: number): number {
+    let deleted = 0;
+    for (const [slot, bucket] of this.rowsBySlot) {
+      const kept: AgentActivityRow[] = [];
+      for (const row of bucket) {
+        if (row.event.ts < cutoffTs) {
+          deleted++;
+        } else {
+          kept.push(row);
+        }
+      }
+      if (kept.length === 0) {
+        this.rowsBySlot.delete(slot);
+      } else if (kept.length !== bucket.length) {
+        this.rowsBySlot.set(slot, kept);
+      }
+    }
+    return deleted;
   }
 
   /** Test-only: total row count across all slots. */
