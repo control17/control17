@@ -30,6 +30,19 @@ export interface BrokerOptions {
   idFactory?: () => string;
   /** Logger for subscriber-side failures and diagnostics. */
   logger?: BrokerLogger;
+  /**
+   * Max subscribers invoked in parallel during a single `push`. Keeps
+   * one slow SSE writer from head-of-line-blocking every other
+   * subscriber on the same push, while still bounding fan-out
+   * concurrency so a pathological 10000-subscriber broadcast doesn't
+   * spawn 10000 simultaneous async tasks.
+   *
+   * Defaults to 32 — comfortably parallel for real squadron-scale
+   * workloads (≤100 concurrent subscribers total), cheap enough
+   * that smaller deployments see no overhead. Set to 1 to keep the
+   * pre-2026-04-16 serial behavior for debugging.
+   */
+  fanoutConcurrency?: number;
 }
 
 /**
@@ -67,12 +80,71 @@ const NOOP_LOGGER: BrokerLogger = {
 
 const EMPTY_IDENTITY: IdentityContext = {};
 
+const DEFAULT_FANOUT_CONCURRENCY = 32;
+
+/**
+ * Minimal bounded-parallel `forEach` over async callbacks. Runs up to
+ * `concurrency` callbacks in flight at once; awaits all of them
+ * before resolving. Exceptions from individual callbacks are passed
+ * to `onError` and swallowed from the caller's perspective — fan-out
+ * must be best-effort-to-each-subscriber rather than all-or-nothing,
+ * because one stuck SSE writer should not prevent delivery to the
+ * other 99 subscribers on the same push.
+ *
+ * Kept as an inline helper (rather than adding `p-limit` as a core
+ * dep) because `@control17/core` is deliberately dep-light — it
+ * carries only `@control17/sdk` as a runtime dep. A 15-line
+ * semaphore is cheaper than dragging p-limit into every non-Node
+ * runtime that wants to embed the broker.
+ */
+async function boundedParallel<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+  onError: (item: T, err: unknown) => void,
+): Promise<void> {
+  if (items.length === 0) return;
+  const limit = Math.max(1, Math.floor(concurrency));
+  if (limit >= items.length) {
+    await Promise.all(
+      items.map(async (item) => {
+        try {
+          await worker(item);
+        } catch (err) {
+          onError(item, err);
+        }
+      }),
+    );
+    return;
+  }
+  let next = 0;
+  const runners: Promise<void>[] = [];
+  for (let i = 0; i < limit; i++) {
+    runners.push(
+      (async () => {
+        while (true) {
+          const index = next++;
+          if (index >= items.length) return;
+          const item = items[index] as T;
+          try {
+            await worker(item);
+          } catch (err) {
+            onError(item, err);
+          }
+        }
+      })(),
+    );
+  }
+  await Promise.all(runners);
+}
+
 export class Broker {
   private readonly registry = new AgentRegistry();
   private readonly eventLog: EventLog;
   private readonly now: () => number;
   private readonly idFactory: () => string;
   private readonly logger: BrokerLogger;
+  private readonly fanoutConcurrency: number;
 
   constructor(options: BrokerOptions) {
     this.eventLog = options.eventLog;
@@ -86,6 +158,7 @@ export class Broker {
         return globalThis.crypto.randomUUID();
       });
     this.logger = options.logger ?? NOOP_LOGGER;
+    this.fanoutConcurrency = options.fanoutConcurrency ?? DEFAULT_FANOUT_CONCURRENCY;
   }
 
   /**
@@ -161,27 +234,44 @@ export class Broker {
 
     const targetStates = [...recipients];
     let sse = 0;
+
+    // Flatten (state, subscriber) pairs once so one bounded-concurrency
+    // sweep covers every subscriber across every recipient. With the
+    // old nested serial await, one slow SSE writer on agent A would
+    // head-of-line-block delivery to agent B — fine at 1–3 subscribers
+    // per slot in v0 tests, visibly broken at squadron scale under
+    // backpressure. See `fanoutConcurrency` in BrokerOptions for the
+    // tunable; default 32 stays well above real-world subscriber
+    // counts while bounding pathological broadcast cases.
+    type FanoutTask = { state: AgentState; sub: Subscriber };
+    const tasks: FanoutTask[] = [];
     for (const state of targetStates) {
       state.agent.lastSeen = ts;
-      // Snapshot before iterating — a subscriber callback is allowed
-      // to mutate the Set (e.g. self-unsubscribe, or trigger cleanup
-      // that removes another subscriber). Iterating a live Set during
-      // async callbacks is technically well-defined for deletions but
-      // too subtle to rely on.
-      const subscribers = [...state.subscribers];
-      for (const sub of subscribers) {
-        try {
-          await sub(message);
-          sse++;
-        } catch (err) {
-          this.logger.warn('subscriber threw during delivery', {
-            agentId: state.agent.agentId,
-            messageId: message.id,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+      // Snapshot subscribers before collecting — a subscriber callback
+      // is allowed to mutate the Set (e.g. self-unsubscribe, or trigger
+      // cleanup that removes another subscriber). Iterating a live
+      // Set while callbacks may mutate it is technically well-defined
+      // for deletions but too subtle to rely on.
+      for (const sub of state.subscribers) {
+        tasks.push({ state, sub });
       }
     }
+
+    await boundedParallel(
+      tasks,
+      this.fanoutConcurrency,
+      async ({ sub }) => {
+        await sub(message);
+        sse++;
+      },
+      ({ state }, err) => {
+        this.logger.warn('subscriber threw during delivery', {
+          agentId: state.agent.agentId,
+          messageId: message.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
 
     return {
       delivery: {
