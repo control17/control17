@@ -30,7 +30,7 @@ import { runObjectivesCommand } from './commands/objectives.js';
 import { type PushCommandInput, runPushCommand } from './commands/push.js';
 import { QuickstartError, runQuickstartCommand } from './commands/quickstart.js';
 import { runRosterCommand } from './commands/roster.js';
-import { runRotateCommand } from './commands/rotate.js';
+import { type RotateCommandInput, runRotateCommand } from './commands/rotate.js';
 import { runServeCommand } from './commands/serve.js';
 import { runSetupCommand } from './commands/setup.js';
 import { runTelemetryCommand, type TelemetryEventKind } from './commands/telemetry.js';
@@ -46,7 +46,8 @@ usage:
   c17 telemetry   enable|disable|preview|rotate|status       opt-in, zero-PII, off-by-default install telemetry
   c17 claude-code [--no-trace] [--doctor] [--skip-doctor] [--unsafe-tls] [-- <claude args>...]   spawn claude-code wrapped in a c17 runner
   c17 push        --body <text> (--agent <id> | --broadcast) [--title <t>] [--level <lvl>] [--data key=value]...
-  c17 roster                        list slots, authority, and connection state
+  c17 roster      [--reveal-token --slot <callsign> [--config-path <path>]]
+                                    list slots (no flags) or rotate+print a slot's token (alias over 'c17 rotate')
   c17 objectives  list|view|create|update|complete|cancel|reassign   squadron objectives
   c17 serve       [--config-path <path>] [--port <n>] [--host <h>] [--db <path>]
 
@@ -342,12 +343,53 @@ async function handleRoster(args: string[]): Promise<void> {
   const { values } = parseSubcommandArgs(args, {
     url: { type: 'string' },
     token: { type: 'string' },
+    'reveal-token': { type: 'boolean' },
+    slot: { type: 'string', short: 's' },
+    'config-path': { type: 'string' },
+    config: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   });
   if (values.help === true) {
     process.stdout.write(USAGE);
     return;
   }
+
+  // `--reveal-token` is an alias over `c17 rotate --slot X`: the only
+  // honest way to surface a slot's bearer plaintext is to mint a fresh
+  // one, since hash-on-disk (I1 posture) means the existing plaintext
+  // was never persisted. Invoking this command therefore has a visible
+  // side effect — the previous token is invalidated. We disclose that
+  // up front so it's impossible to miss, then delegate to the exact
+  // same code path `c17 rotate` uses.
+  if (getBoolean(values, 'reveal-token')) {
+    const slot = getString(values, 'slot');
+    if (!slot) {
+      fail('roster --reveal-token: --slot <callsign> is required', 2);
+    }
+    log('');
+    log(`c17 roster --reveal-token → rotating '${slot}' token.`);
+    log(
+      '  (c17 never persists token plaintext; the only honest "reveal"',
+    );
+    log(
+      '   is to mint a fresh token and print it once. This invalidates',
+    );
+    log(
+      '   any previous token for this slot.)',
+    );
+    const rotateInput: RotateCommandInput = {
+      slot,
+      configPath: getString(values, 'config-path') ?? getString(values, 'config'),
+    };
+    try {
+      await runRotateCommand(rotateInput, (line) => log(line));
+    } catch (err) {
+      if (err instanceof UsageError) fail(err.message, 2);
+      fail(err instanceof Error ? err.message : String(err));
+    }
+    return;
+  }
+
   try {
     const client = makeClient(values);
     const output = await runRosterCommand(client);
